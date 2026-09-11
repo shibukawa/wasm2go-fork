@@ -75,7 +75,8 @@ var (
 	stextRe = regexp.MustCompile(`^([^\s]+) STEXT`)
 	insnRe  = regexp.MustCompile(`^\t0x[0-9a-f]+ (\d+) \([^)]*\)\t(.*)$`)
 	textRe  = regexp.MustCompile(`TEXT\t([^\s(]+)\(SB\), ([^,]+), \$(\d+)-(\d+)$`)
-	dataRe  = regexp.MustCompile(`^([^\s]+) SRODATA (?:static )?(?:dupok )?size=(\d+)$`)
+	// Go 1.27 appends " align=0x..." to data symbol headers.
+	dataRe  = regexp.MustCompile(`^([^\s]+) SRODATA (?:static )?(?:dupok )?size=(\d+)(?: align=0x[0-9a-f]+)?$`)
 	hexRe   = regexp.MustCompile(`^\t0x[0-9a-f]+ ((?:[0-9a-f]{2} )+)`)
 	relocRe = regexp.MustCompile(`^\trel (\d+)\+(\d+) t=R_ADDR ([^\s]+)\+(\d+)$`)
 )

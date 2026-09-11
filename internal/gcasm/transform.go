@@ -413,26 +413,26 @@ func findJumpTables(fnName string, insns []Insn, datas map[string]*DataSym, flag
 			j++
 		}
 		if j >= len(insns) {
-			return nil, fmt.Errorf("jump-table LEAQ %q at end of body", in.Text)
+			return nil, fmt.Errorf("%w: jump-table LEAQ %q at end of body", errUnsupportedJumpTable, in.Text)
 		}
 		jm := jtJmpRe.FindStringSubmatch(insns[j].Text)
 		if jm == nil || jm[1] != lm[2] {
-			return nil, fmt.Errorf("jump-table LEAQ %q not followed by indirect JMP (got %q)", in.Text, insns[j].Text)
+			return nil, fmt.Errorf("%w: jump-table LEAQ %q not followed by indirect JMP (got %q)", errUnsupportedJumpTable, in.Text, insns[j].Text)
 		}
 		tab, ok := datas[lm[1]]
 		if !ok {
-			return nil, fmt.Errorf("jump table %s not captured", lm[1])
+			return nil, fmt.Errorf("%w: jump table %s not captured", errUnsupportedJumpTable, lm[1])
 		}
 		if len(tab.Relocs) == 0 || len(tab.Relocs)*8 != tab.Size {
-			return nil, fmt.Errorf("jump table %s: %d relocs for size %d", lm[1], len(tab.Relocs), tab.Size)
+			return nil, fmt.Errorf("%w: jump table %s: %d relocs for size %d", errUnsupportedJumpTable, lm[1], len(tab.Relocs), tab.Size)
 		}
 		site := &jtSite{idx: i, jmpIdx: j, idxReg: jm[2], baseReg: lm[2], entryCount: len(tab.Relocs)}
 		for k, r := range tab.Relocs {
 			if r.Off != k*8 {
-				return nil, fmt.Errorf("jump table %s: reloc %d at offset %d", lm[1], k, r.Off)
+				return nil, fmt.Errorf("%w: jump table %s: reloc %d at offset %d", errUnsupportedJumpTable, lm[1], k, r.Off)
 			}
 			if r.Sym != fnName {
-				return nil, fmt.Errorf("jump table %s: reloc targets %s, not %s", lm[1], r.Sym, fnName)
+				return nil, fmt.Errorf("%w: jump table %s: reloc targets %s, not %s", errUnsupportedJumpTable, lm[1], r.Sym, fnName)
 			}
 			if n := len(site.runs); n > 0 && site.runs[n-1].target == r.Addend {
 				continue

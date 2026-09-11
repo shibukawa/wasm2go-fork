@@ -154,11 +154,11 @@ func a64FindJumpTables(fnName string, insns []Insn, datas map[string]*DataSym, f
 			j++
 		}
 		if j >= len(insns) {
-			return nil, fmt.Errorf("jump-table load %q at end of body", in.Text)
+			return nil, fmt.Errorf("%w: jump-table load %q at end of body", errUnsupportedJumpTable, in.Text)
 		}
 		dm := a64JtLdrRe.FindStringSubmatch(insns[j].Text)
 		if dm == nil || dm[1] != lm[2] {
-			return nil, fmt.Errorf("jump-table %q not followed by indexed load (got %q)", in.Text, insns[j].Text)
+			return nil, fmt.Errorf("%w: jump-table %q not followed by indexed load (got %q)", errUnsupportedJumpTable, in.Text, insns[j].Text)
 		}
 		idxReg := dm[2]
 		tReg := dm[3]
@@ -168,22 +168,22 @@ func a64FindJumpTables(fnName string, insns []Insn, datas map[string]*DataSym, f
 		}
 		jm := a64JtJmpRe.FindStringSubmatch(insns[k].Text)
 		if jm == nil || jm[1] != tReg {
-			return nil, fmt.Errorf("jump-table load %q not followed by indirect JMP (got %q)", insns[j].Text, insns[k].Text)
+			return nil, fmt.Errorf("%w: jump-table load %q not followed by indirect JMP (got %q)", errUnsupportedJumpTable, insns[j].Text, insns[k].Text)
 		}
 		tab, ok := datas[lm[1]]
 		if !ok {
-			return nil, fmt.Errorf("jump table %s not captured", lm[1])
+			return nil, fmt.Errorf("%w: jump table %s not captured", errUnsupportedJumpTable, lm[1])
 		}
 		if len(tab.Relocs) == 0 || len(tab.Relocs)*8 != tab.Size {
-			return nil, fmt.Errorf("jump table %s: %d relocs for size %d", lm[1], len(tab.Relocs), tab.Size)
+			return nil, fmt.Errorf("%w: jump table %s: %d relocs for size %d", errUnsupportedJumpTable, lm[1], len(tab.Relocs), tab.Size)
 		}
 		site := &jtSite{idx: i, jmpIdx: k, idxReg: idxReg, baseReg: lm[2], tReg: tReg, entryCount: len(tab.Relocs)}
 		for ri, r := range tab.Relocs {
 			if r.Off != ri*8 {
-				return nil, fmt.Errorf("jump table %s: reloc %d at offset %d", lm[1], ri, r.Off)
+				return nil, fmt.Errorf("%w: jump table %s: reloc %d at offset %d", errUnsupportedJumpTable, lm[1], ri, r.Off)
 			}
 			if r.Sym != fnName {
-				return nil, fmt.Errorf("jump table %s: reloc targets %s, not %s", lm[1], r.Sym, fnName)
+				return nil, fmt.Errorf("%w: jump table %s: reloc targets %s, not %s", errUnsupportedJumpTable, lm[1], r.Sym, fnName)
 			}
 			if n := len(site.runs); n > 0 && site.runs[n-1].target == r.Addend {
 				continue
