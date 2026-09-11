@@ -2593,6 +2593,29 @@ func (t *translator) emitNewFuncsMode(mode newMode) []ast.Decl {
 				Args: []ast.Expr{newID("m")},
 			}})
 		}
+		if !memFromArg && nChunks > 0 {
+			// InitData copies the active data segments into a module whose
+			// memory the caller supplied (NewWithMemory skips that so a
+			// snapshot can be restored); a fresh caller-provided memory
+			// needs it before the start function runs.
+			initBody := &ast.BlockStmt{}
+			for c := 0; c < nChunks; c++ {
+				initBody.List = append(initBody.List, &ast.ExprStmt{X: &ast.CallExpr{
+					Fun:  newID(fmt.Sprintf("initData_%d", c)),
+					Args: []ast.Expr{newID("m")},
+				}})
+			}
+			t.elemInitChunks = append(t.elemInitChunks, &ast.FuncDecl{
+				Name: newID("InitData"),
+				Type: &ast.FuncType{
+					Params: &ast.FieldList{List: []*ast.Field{{
+						Names: []*ast.Ident{newID("m")},
+						Type:  t.moduleType(),
+					}}},
+				},
+				Body: initBody,
+			})
+		}
 	}
 
 	// Passive data segments: register blob views under their ORIGINAL
