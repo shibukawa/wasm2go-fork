@@ -3401,9 +3401,11 @@ func (t *translator) emitExportWrappers() ([]ast.Decl, error) {
 		}
 		ft := t.mod.FuncTypeOf(exp.Index)
 		methodName := ExportMethodName(exp.Name)
-		if prev, dup := emittedMethods[methodName]; dup {
-			return nil, fmt.Errorf("wasm2go: exports %q and %q both mangle to method name %q; rename one in the wasm to avoid the collision",
-				prev, exp.Name, methodName)
+		if _, dup := emittedMethods[methodName]; dup {
+			// Two export names mangle to the same Go identifier (e.g.
+			// relation_close vs RelationClose): keep both by suffixing the
+			// later one with its function index.
+			methodName = fmt.Sprintf("%s_%d", methodName, exp.Index)
 		}
 		emittedMethods[methodName] = exp.Name
 
