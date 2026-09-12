@@ -114,6 +114,29 @@ that crosses a threshold changes shape. File names are sanitized so the
 go tool reads them as plain package source (no `_test`, GOOS or GOARCH
 suffixes, no leading underscore).
 
+Measured on pgmem's history (five commits, two of which rebuild the
+wasm: one adds a host import, one links in pgcrypto). The table is the
+size of the thin pack `git push` would send for each commit, i.e. the
+new objects delta-compressed against the previous commit:
+
+| commit | `Fn<index>`, one file per package | `-symbol-names`, one file per package | `-symbol-names -group-files` |
+|---|---|---|---|
+| initial import | 19.2 MB | 20.3 MB | 20.2 MB |
+| one host import added | 8.4 MB | 0.3 MB | 0.3 MB |
+| two commits without a wasm rebuild | 0.1 MB | 0.1 MB | 0.1 MB |
+| pgcrypto linked in (+242 functions, data addresses shift) | 4.5 MB | 6.9 MB | 2.5 MB |
+| total | 32.4 MB | 27.7 MB | 23.2 MB |
+| files under the generated tree | 25 | 25 | 1,825 |
+
+Symbol names alone fix the small change (a renumbering that touched
+394,052 lines becomes 10). The large change gets cheaper only once the
+files are small: with 13-21 MB files, changes scattered through a file
+delta-compress poorly (git's delta search has a bounded window), and the
+symbol-named single-file layout was actually worse than the index-named
+one there. Per-subject files bring it down to 2.5 MB, and a working-tree
+edit rewrites one file of mostly under 100 KB instead of a 20 MB one.
+The initial import is the generated code itself and does not change.
+
 Usage (with the same `-pure -symbol-names` prerequisites):
 
 ```
