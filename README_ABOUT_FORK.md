@@ -12,16 +12,18 @@ tool; this file covers only what differs.
 | `main` | mirrors upstream `main`; never carries fork commits |
 | `pgmem` | the fork: upstream `main` plus the commits listed below |
 | `vX.Y.Z` | upstream's own tags, carried over unchanged |
-| `vX.Y.Z-fork.N` | a fork release: upstream `vX.Y.Z` (or later, see below) plus the fork commits, N counting up per release |
+| `vX.Y.Z-fork.N` | a fork release: upstream `vX.Y.Z` plus the fork commits, N counting up per release |
 
 The module path stays `github.com/goccy/wasm2go`, so the fork is consumed
 by cloning and building, not by `go get`. pgmem pins it in
 `wasm/wasm2go.lock` (repository, branch, commit) and builds
 `cmd/wasm2go` from a clone at that commit.
 
-The current base is upstream commit 730057c ("gcasm: arm64 fhm override
-feature level", #69), 11 commits past `v0.5.9`; upstream had not tagged
-that range, so the fork tags read `v0.5.9-fork.N`.
+The current base is upstream `v0.5.15` (commit 730057c, "gcasm: arm64 fhm
+override feature level", #69), so the fork tags read `v0.5.15-fork.N`.
+Releases 1 to 4 were first tagged `v0.5.9-fork.N`, from before upstream
+tagged that commit; those names are retired and the same commits now
+carry the `v0.5.15-fork.N` names.
 
 To take a new upstream version: fast-forward `main` from
 `https://github.com/goccy/wasm2go.git`, merge (or rebase) `pgmem` onto it,
