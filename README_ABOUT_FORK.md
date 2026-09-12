@@ -146,7 +146,7 @@ wasm2go -pure -symbol-names -chunks 6 -group-files -i module.wasm \
   -out-dir gen -pkg gen -import example.com/proj/gen
 ```
 
-### `-addr-consts`: static-data addresses out of the function bodies
+### `-addr-consts`: static-data addresses as named constants
 
 `-symbol-names` and `-group-files` keep the *shape* of the output stable.
 What they cannot keep stable is an address: adding one string literal to
@@ -171,19 +171,43 @@ The insertion is not at the end, either: the new string landed 1.3% into
 the blob (a sorted symbol table), so linking the extension last would not
 have helped.
 
-`-addr-consts` names every constant that lands in the module's
-static-data window and declares the names once per emitted file:
+`-addr-consts` gives every constant that lands in the module's
+static-data window a name, declared once per emitted file:
 
 ```go
-const _a0, _a1, _a2 = 4442992, 322584, 471635   // one line, in p0.go
+const _a_F_errfinish_0, _a_F_errfinish_1 = 471635, 86458   // one line, p0.go
 
-F_errmsg_internal(m, int32(_a1), int32(0))       // was int32(322584)
+F_errmsg_internal(m, int32(_a_F_errfinish_0), int32(0))     // was int32(471635)
 ```
 
-A named *constant*, not a table: `int32(_a1)` is still a constant
-expression, so the compiler folds it into the instruction stream exactly
-as it folded the literal and the generated machine code does not change
-at all (measured below). Only the one declaration absorbs a layout shift.
+Named *constants*, not a table: `int32(_a_F_errfinish_0)` is still a
+constant expression, so the compiler folds it into the instruction stream
+exactly as it folded the literal.
+
+**The name is keyed by the use site** — the function plus the ordinal of
+the value within that function — and deliberately not by the value.
+Value keying dedupes better and was tried first; it does not survive a
+rebuild. A shifted data layout moves objects by *different* amounts, so
+two values that used to coincide stop coinciding (or start), the file's
+slot sequence gains or loses an entry, and every name after that point
+changes. On pgmem's `bundle auto_explain` commit that renumbering was
+31,494 of the 56,831 changed lines. Keyed by the use site, a function's
+names depend on nothing but its own body.
+
+The memory-access offsets move the same way, so under `-addr-consts`
+they leave the file-wide, value-keyed `_consts` table for one array per
+function:
+
+```go
+var (
+	_c_F_errfinish = [3]uintptr{4442992, 4437600, 4062048}
+)
+```
+
+Still a `var`: the arm64 literal-pool hazard that table exists for (see
+`largeConstThreshold`) requires that an access offset NOT be foldable
+into an addressing immediate. Without `-addr-consts` the old `_consts`
+table is emitted unchanged.
 
 - The window is `[lowest data-segment destination, top of .bss)`, floored
   at 4096 (below that a constant is far more likely a size or a mask than
@@ -192,52 +216,38 @@ at all (measured below). Only the one declaration absorbs a layout shift.
   `__stack_pointer` — capped by the declared initial memory.
   `-addr-consts-max` overrides it; the derived window is printed to
   stderr. Classifying loosely is safe: the constant holds the exact
-  value, so a non-address only costs a name. Classifying narrowly only
-  costs churn.
+  value, so a non-address only costs a name.
 - Constants outside the window keep their inline literal. On a memory64
   module addresses are i64, so there the i32 constants stay inline and
-  `_a64_<n>` carries the i64 ones.
-- Memory-access offsets are untouched: a load or store with a constant
-  base still folds base+offset into one `_consts` entry, which was
-  already diff-stable (the whole table is one line) and which is a `var`
-  on purpose — that one must NOT be foldable into an addressing immediate
-  (the arm64 literal-pool hazard). The address constant such a base would
-  otherwise get is deliberately not allocated.
-- Names are handed out in first-use order, so a pure layout shift leaves
-  every name where it was and rewrites the values alone. A function added
-  in the middle of a chunk can still bump the names after it; on the
-  citext commit that mechanism (the existing `_consts` table) moved 290
-  body lines out of 55,809.
+  `_a64_<func>_<n>` carries the i64 ones.
+- A constant base that the access path folds into the offset gets no
+  address constant of its own, so no declaration goes unread.
 
-For pgmem's module: window `[4096, 12919808)`, 31,745 constants over the
-six chunk packages, 81,636 reads. Simulating a pure data shift over the
-generated tree (a string inserted early, every address above it +688,
-`data.bin` grown to match):
+Measured on pgmem's module: window `[4096, 13136384)`, 48,118 constants
+in 7,884 functions over the six chunk packages. For the `bundle
+auto_explain` commit (a rebuild that both shifts every address and adds a
+whole extension):
 
-| | `-symbol-names -group-files` | + `-addr-consts` |
-|---|---|---|
-| files changed | 1,429 | 7 |
-| lines changed | 51,740 | 12 |
-| thin pack `git push` would send | 1.44 MB | 131 KB |
+| | `-symbol-names -group-files` | + `-addr-consts`, value-keyed | + use-site-keyed |
+|---|---|---|---|
+| files changed | 1,563 | 1,007 | 37 |
+| lines changed | 84,502 | 56,827 | 25,535 |
 
-Projecting the same substitution onto the real citext commit (which also
-adds functions, so its residue is larger) takes it from 55,809 changed
-lines to 5,912 plus the six declarations.
+Of those last 25,535 lines, 20,568 are auto_explain's own new code, 4,444
+are one changed `_c_<func>` line per function, 6 are the address
+declarations, and 517 are bodies whose own constant set changed.
 
-What it costs. Nothing at runtime: p0's compiled text section is
-identical byte for byte with and without the flag (2,589,280 bytes), and
-on the asm-bundle path the generated `arm64.s` is unchanged — the
-constants are immediates there as before. The package archive grows 1.2%
-(33.09 MB → 33.48 MB of `.a`) for the export data of 4,448 constant
-names, which never reaches a linked binary. What it does cost is reading
-the generated code: the bodies no longer show the addresses, and the
-declaration at the top of `pN.go` is the place to look them up.
+What it costs. Almost nothing at runtime: p0's compiled text section came
+out 816 bytes *smaller* (2,930,576 vs 2,931,392) because the addresses
+stay immediates, while its data grew 15 KB for the per-function offset
+arrays, which no longer dedupe across the package. What it does cost is
+reading the generated code: the bodies no longer show the addresses, and
+the declaration at the top of `pN.go` is where to look them up.
 
 Verified by generating pgmem's module both ways and substituting the
-declarations back into the bodies: all 1,796 files come out identical to
-the `-addr-consts`-less output (1,791 byte for byte, the six `pN.go` and
-the main file modulo the declaration's own line), and the whole 102 MB
-tree compiles. Without the flag the output is byte for byte what it was.
+declarations back into the bodies: every file comes out identical to the
+`-addr-consts`-less output, and the whole 102 MB tree compiles and passes
+pgmem's suite. Without the flag the output is byte for byte what it was.
 
 Usage:
 

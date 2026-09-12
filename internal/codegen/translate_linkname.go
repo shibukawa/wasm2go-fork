@@ -232,10 +232,7 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		// useLargeConst comment for why large memory offsets are
 		// routed through a runtime-loaded table instead of inline
 		// literals.
-		if decl := t.emitLargeConstsDecl(chunkIdx); decl != nil {
-			pkgFile.Decls = append(pkgFile.Decls, decl)
-		}
-		pkgFile.Decls = append(pkgFile.Decls, t.emitAddrConstsDecls(chunkIdx)...)
+		pkgFile.Decls = append(pkgFile.Decls, t.emitConstDecls(chunkIdx)...)
 		if t.opts.GroupFiles {
 			// Nothing left in pN.go may mention base; keep its import
 			// alive so the file compiles whatever the extras are.
@@ -373,10 +370,7 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 	}
 	mainFile := &ast.File{Name: newID(t.opts.Package)}
 	mainFile.Decls = append(mainFile.Decls, &ast.GenDecl{Tok: token.IMPORT, Specs: importsAsSpecs(mainImports)})
-	if decl := t.emitLargeConstsDecl(-1); decl != nil {
-		mainFile.Decls = append(mainFile.Decls, decl)
-	}
-	mainFile.Decls = append(mainFile.Decls, t.emitAddrConstsDecls(-1)...)
+	mainFile.Decls = append(mainFile.Decls, t.emitConstDecls(-1)...)
 	mainFile.Decls = append(mainFile.Decls, mainDecls...)
 	{
 		buf := &bytes.Buffer{}

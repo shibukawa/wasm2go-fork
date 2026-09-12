@@ -1541,8 +1541,10 @@ func (em *ssaEmitter) wasmExcType() ast.Expr {
 // The point is diff stability, not code generation: an address literal
 // is the only thing in a function body that a rebuild from slightly
 // changed sources reliably rewrites, because inserting one string
-// literal shifts every address above it. `int32(_a<k>)` keeps the body
-// identical and moves the shifted values into one declaration per file.
+// literal shifts every address above it. `int32(_a_<func>_<n>)` keeps
+// the body identical and moves the shifted values into one declaration
+// per file; the name is keyed by the function and the ordinal within it,
+// so nothing else in the module can renumber it.
 // Because _a<k> is a named CONSTANT, the expression stays a constant
 // expression and the compiled code is bit-identical to the literal's —
 // unlike the _consts table, which is a var precisely so that large
@@ -1557,7 +1559,7 @@ func (em *ssaEmitter) addrConstExpr32(n int32) ast.Expr {
 	}
 	return &ast.CallExpr{
 		Fun:  newID("int32"),
-		Args: []ast.Expr{newID(addrConstPrefix + strconv.Itoa(em.t.useAddrConst(uint32(n))))},
+		Args: []ast.Expr{newID(em.t.addrConstName(uint32(n)))},
 	}
 }
 
@@ -1574,7 +1576,7 @@ func (em *ssaEmitter) addrConstExpr64(n int64) ast.Expr {
 	}
 	return &ast.CallExpr{
 		Fun:  newID("int64"),
-		Args: []ast.Expr{newID(addrConstPrefix64 + strconv.Itoa(em.t.useAddrConst64(uint64(n))))},
+		Args: []ast.Expr{newID(em.t.addrConstName64(uint64(n)))},
 	}
 }
 

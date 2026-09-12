@@ -322,6 +322,9 @@ func ssaConstBase(v *ssa.Value) *ssa.Value {
 // constsIndexExpr returns `_consts[<idx>]` for the given constant
 // value, registering it in the current file's table on first use.
 func (em *ssaEmitter) constsIndexExpr(value uint64) ast.Expr {
+	if em.t.opts.AddrConsts {
+		return em.t.largeConstFnRef(value)
+	}
 	idx := em.t.useLargeConst(value)
 	return &ast.IndexExpr{
 		X:     newID("_consts"),

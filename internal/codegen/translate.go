@@ -573,11 +573,7 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	// table groups every large constant the body functions emitted.
 	// See useLargeConst for why this routes through a runtime-loaded
 	// slot instead of an inline literal.
-	if decl := t.emitLargeConstsDecl(t.currentChunk); decl != nil {
-		out.Decls = append(out.Decls, decl)
-	}
-	// Package-level static-data address table (Options.AddrConsts).
-	out.Decls = append(out.Decls, t.emitAddrConstsDecls(t.currentChunk)...)
+	out.Decls = append(out.Decls, t.emitConstDecls(t.currentChunk)...)
 
 	// Export wrappers.
 	exportDecls, err := t.emitExportWrappers()
@@ -1074,16 +1070,40 @@ type translator struct {
 	// runs <const value> -> <slot index in the table>.
 	largeConsts map[int]map[uint64]int
 
-	// addrConsts records, per emitted file, the unique static-data
-	// addresses that appeared as plain i32 constants — a pointer
-	// passed to a callee, a global variable's address, anything the
-	// memory-access path did not already fold into `_consts`. Keyed
-	// like largeConsts (file index -> value -> slot), and emitted as
-	// `var _addr = [N]int32{...}`. Only populated under
-	// Options.AddrConsts; addrConsts64 is its i64 counterpart, used
-	// on a memory64 module where addresses are i64.
-	addrConsts   map[int]map[uint32]int
-	addrConsts64 map[int]map[uint64]int
+	// addrConsts records, per emitted file and per function, the
+	// static-data addresses that appeared as plain i32 constants — a
+	// pointer passed to a callee, a global variable's address, anything
+	// the memory-access path did not already fold into `_consts`. They
+	// are emitted as one `const _a_<func>_<n> = <addr>` declaration per
+	// file. Only populated under Options.AddrConsts; addrConsts64 is
+	// its i64 counterpart, used on a memory64 module where addresses
+	// are i64.
+	//
+	// The slot is keyed by the USE SITE — the function plus the ordinal
+	// of the value within that function — and not by the value. Value
+	// keying looks tempting (it dedupes across the file) but it cannot
+	// survive a rebuild: a shifted data layout moves objects by
+	// DIFFERENT amounts, so two values that used to share a slot stop
+	// sharing it (or start), the slot sequence gains or loses an entry,
+	// and every name after that point changes. Keying by the use site
+	// makes a function's names depend on nothing but its own body.
+	//
+	// Key: file index (see largeConsts) -> function name -> that
+	// function's distinct values in first-use order.
+	addrConsts   map[int]map[string]*fnConstTable
+	addrConsts64 map[int]map[string]*fnConstTable
+	// largeConstsByFn is the same thing for memory-access offsets under
+	// Options.AddrConsts: one `var _c_<func> = [N]uintptr{...}` array
+	// per function instead of the file-wide, value-keyed _consts table,
+	// which renumbers for the same reason. Still a var: the arm64
+	// literal-pool hazard largeConstThreshold describes requires that
+	// the offset NOT be foldable into an addressing immediate.
+	largeConstsByFn map[int]map[string]*fnConstTable
+	// curFuncName is the generated name of the function being emitted,
+	// the key both tables above are scoped to. Empty outside a function
+	// body (export wrappers, helpers), where constFuncFallback stands
+	// in for it.
+	curFuncName string
 
 	// dataRange caches staticDataRange: [lo, hi) of the module's
 	// static-data addresses. dataRangeDone separates "not computed"
@@ -1391,6 +1411,62 @@ func (t *translator) registerLinknameForward(callerChunk int, funcIdx uint32, ta
 	t.linknameForwards[callerChunk][funcIdx] = targetChunk
 }
 
+// fnConstTable holds one function's constants for one emitted file: the
+// distinct values it uses, in the order it first used them. The ordinal
+// is the name the body reads, so it must depend only on this function.
+type fnConstTable struct {
+	idx  map[uint64]int
+	vals []uint64
+}
+
+func (f *fnConstTable) use(value uint64) int {
+	if i, ok := f.idx[value]; ok {
+		return i
+	}
+	i := len(f.vals)
+	f.idx[value] = i
+	f.vals = append(f.vals, value)
+	return i
+}
+
+// constFuncFallback keys constants emitted outside any function body.
+const constFuncFallback = "_misc"
+
+// fnConstSlot registers value for the current file and function in the
+// given table set, creating the maps on demand, and returns the
+// function key plus the value's ordinal within it.
+func (t *translator) fnConstSlot(tables *map[int]map[string]*fnConstTable, value uint64) (string, int) {
+	if *tables == nil {
+		*tables = map[int]map[string]*fnConstTable{}
+	}
+	perFile := (*tables)[t.currentChunk]
+	if perFile == nil {
+		perFile = map[string]*fnConstTable{}
+		(*tables)[t.currentChunk] = perFile
+	}
+	name := t.curFuncName
+	if name == "" {
+		name = constFuncFallback
+	}
+	tbl := perFile[name]
+	if tbl == nil {
+		tbl = &fnConstTable{idx: map[uint64]int{}}
+		perFile[name] = tbl
+	}
+	return name, tbl.use(value)
+}
+
+// sortedFnConsts returns the functions of one file's table in name
+// order, so the emitted declaration is deterministic.
+func sortedFnConsts(perFile map[string]*fnConstTable) []string {
+	names := make([]string, 0, len(perFile))
+	for name := range perFile {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // largeConstThreshold is the smallest absolute offset that gets routed
 // through the package-level _consts table instead of being emitted
 // as an inline literal. Below the threshold, ARM64 LDR's 12-bit
@@ -1555,95 +1631,137 @@ func (t *translator) staticDataRange() (uint64, uint64) {
 	return lo, hi
 }
 
-// useAddrConst registers a static-data address for the current file's
-// _addr table and returns its slot, the way useLargeConst does for
-// _consts. Slots are handed out in first-use order, so a rebuild that
-// only moves the data keeps every slot where it was and rewrites the
-// table's values alone.
-func (t *translator) useAddrConst(value uint32) int {
-	if t.addrConsts == nil {
-		t.addrConsts = map[int]map[uint32]int{}
-	}
-	tbl := t.addrConsts[t.currentChunk]
-	if tbl == nil {
-		tbl = map[uint32]int{}
-		t.addrConsts[t.currentChunk] = tbl
-	}
-	if idx, ok := tbl[value]; ok {
-		return idx
-	}
-	idx := len(tbl)
-	tbl[value] = idx
-	return idx
+// addrConstName registers an i32 static-data address for the current
+// function and returns the identifier its body reads: `_a_<func>_<n>`,
+// where n is the ordinal of the value within that function. See
+// translator.addrConsts for why the name is keyed by the use site.
+func (t *translator) addrConstName(value uint32) string {
+	fn, ord := t.fnConstSlot(&t.addrConsts, uint64(value))
+	return fmt.Sprintf("%s%s_%d", addrConstPrefix, fn, ord)
 }
 
-// useAddrConst64 is useAddrConst for a memory64 module's i64
-// addresses; the two tables are separate so neither access site needs
-// a conversion.
-func (t *translator) useAddrConst64(value uint64) int {
-	if t.addrConsts64 == nil {
-		t.addrConsts64 = map[int]map[uint64]int{}
-	}
-	tbl := t.addrConsts64[t.currentChunk]
-	if tbl == nil {
-		tbl = map[uint64]int{}
-		t.addrConsts64[t.currentChunk] = tbl
-	}
-	if idx, ok := tbl[value]; ok {
-		return idx
-	}
-	idx := len(tbl)
-	tbl[value] = idx
-	return idx
+// addrConstName64 is addrConstName for a memory64 module's i64
+// addresses; the two tables are separate so neither access site needs a
+// conversion.
+func (t *translator) addrConstName64(value uint64) string {
+	fn, ord := t.fnConstSlot(&t.addrConsts64, value)
+	return fmt.Sprintf("%s%s_%d", addrConstPrefix64, fn, ord)
 }
 
-// emitAddrConstsDecls returns the address table for the given file: one
-// `const _a0, _a1, ... = <addr>, <addr>, ...` declaration (and its i64
-// counterpart `_a64_0, ...` on a memory64 module), or nil when nothing
+// addrConstPrefix / addrConstPrefix64 prefix the address constants; the
+// function name and the ordinal follow.
+const (
+	addrConstPrefix   = "_a_"
+	addrConstPrefix64 = "_a64_"
+)
+
+// emitAddrConstsDecls returns the address declarations for the given
+// file: one `const _a_<func>_0, _a_<func>_1, ... = <addr>, <addr>, ...`
+// (and its i64 counterpart on a memory64 module), or nil when nothing
 // registered.
 //
-// A named constant, not a variable: the bodies that read it stay
-// constant expressions, so the Go compiler folds the address into the
+// Named constants, not a table: the bodies that read them stay constant
+// expressions, so the Go compiler folds each address into the
 // instruction stream exactly as it folded the literal and the generated
 // machine code is unchanged. The declaration is what absorbs a layout
-// shift — one spec, emitted on one line in slot order, so the shift is
-// a single changed line per file.
+// shift — one spec on one line, so a shift that moves every address
+// changes one line per file and no function body at all.
 func (t *translator) emitAddrConstsDecls(file int) []ast.Decl {
 	var decls []ast.Decl
-	if tbl := t.addrConsts[file]; len(tbl) > 0 {
-		values := make([]ast.Expr, len(tbl))
-		for v, i := range tbl {
-			values[i] = intLitSigned(int64(int32(v)))
-		}
-		decls = append(decls, addrConstsDecl(addrConstPrefix, values))
+	if decl := fnConstsDecl(addrConstPrefix, t.addrConsts[file], func(v uint64) ast.Expr {
+		return intLitSigned(int64(int32(uint32(v))))
+	}); decl != nil {
+		decls = append(decls, decl)
 	}
-	if tbl := t.addrConsts64[file]; len(tbl) > 0 {
-		values := make([]ast.Expr, len(tbl))
-		for v, i := range tbl {
-			values[i] = intLitSigned(int64(v))
-		}
-		decls = append(decls, addrConstsDecl(addrConstPrefix64, values))
+	if decl := fnConstsDecl(addrConstPrefix64, t.addrConsts64[file], func(v uint64) ast.Expr {
+		return intLitSigned(int64(v))
+	}); decl != nil {
+		decls = append(decls, decl)
 	}
 	return decls
 }
 
-// addrConstPrefix / addrConstPrefix64 name the address constants; the
-// slot number follows. Short on purpose: the name appears once per
-// address use across the whole module.
-const (
-	addrConstPrefix   = "_a"
-	addrConstPrefix64 = "_a64_"
-)
-
-func addrConstsDecl(prefix string, values []ast.Expr) ast.Decl {
-	names := make([]*ast.Ident, len(values))
-	for i := range values {
-		names[i] = newID(prefix + strconv.Itoa(i))
+// fnConstsDecl renders one CONST declaration naming every value of
+// every function in the file, in function-name then ordinal order.
+func fnConstsDecl(prefix string, perFile map[string]*fnConstTable, lit func(uint64) ast.Expr) ast.Decl {
+	if len(perFile) == 0 {
+		return nil
+	}
+	var names []*ast.Ident
+	var values []ast.Expr
+	for _, fn := range sortedFnConsts(perFile) {
+		for i, v := range perFile[fn].vals {
+			names = append(names, newID(fmt.Sprintf("%s%s_%d", prefix, fn, i)))
+			values = append(values, lit(v))
+		}
 	}
 	return &ast.GenDecl{
 		Tok:   token.CONST,
 		Specs: []ast.Spec{&ast.ValueSpec{Names: names, Values: values}},
 	}
+}
+
+// largeConstFnRef registers a memory-access offset for the current
+// function and returns the expression its access site reads:
+// `_c_<func>[<n>]`. Used instead of the file-wide _consts table under
+// Options.AddrConsts, for the reason translator.addrConsts describes:
+// the value-keyed table renumbers whenever a rebuild changes which
+// offsets happen to coincide, and every access site after the change
+// then churns.
+func (t *translator) largeConstFnRef(value uint64) ast.Expr {
+	fn, ord := t.fnConstSlot(&t.largeConstsByFn, value)
+	return &ast.IndexExpr{
+		X:     newID(largeConstFnPrefix + fn),
+		Index: &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(ord)},
+	}
+}
+
+const largeConstFnPrefix = "_c_"
+
+// emitLargeConstsFnDecl returns `var _c_<func> = [N]uintptr{...}` for
+// every function of the given file that used a large memory-access
+// offset, or nil when none did. A var, like the file-wide _consts table
+// it replaces: the arm64 literal-pool hazard requires that the offset
+// stay unfoldable (see largeConstThreshold).
+func (t *translator) emitLargeConstsFnDecl(file int) ast.Decl {
+	perFile := t.largeConstsByFn[file]
+	if len(perFile) == 0 {
+		return nil
+	}
+	gd := &ast.GenDecl{Tok: token.VAR}
+	for _, fn := range sortedFnConsts(perFile) {
+		vals := perFile[fn].vals
+		elts := make([]ast.Expr, len(vals))
+		for i, v := range vals {
+			elts[i] = uintLit(v)
+		}
+		gd.Specs = append(gd.Specs, &ast.ValueSpec{
+			Names: []*ast.Ident{newID(largeConstFnPrefix + fn)},
+			Values: []ast.Expr{&ast.CompositeLit{
+				Type: &ast.ArrayType{
+					Len: &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(len(elts))},
+					Elt: newID("uintptr"),
+				},
+				Elts: elts,
+			}},
+		})
+	}
+	return gd
+}
+
+// emitConstDecls returns every constant declaration one emitted file
+// needs: the memory-access offsets (the file-wide _consts table, or one
+// _c_<func> array per function under Options.AddrConsts) and the
+// static-data address constants.
+func (t *translator) emitConstDecls(file int) []ast.Decl {
+	var decls []ast.Decl
+	if decl := t.emitLargeConstsDecl(file); decl != nil {
+		decls = append(decls, decl)
+	}
+	if decl := t.emitLargeConstsFnDecl(file); decl != nil {
+		decls = append(decls, decl)
+	}
+	return append(decls, t.emitAddrConstsDecls(file)...)
 }
 
 // Two kinds of cross-chunk forward live behind these helpers:
@@ -3196,6 +3314,12 @@ func (t *translator) emitOneDefinedFunction(funcIdx uint32) ([]ast.Decl, error) 
 	localIdx := funcIdx - t.mod.NumImportedFuncs
 	fn := t.mod.Functions[localIdx]
 	ft := t.mod.Types[fn.TypeIdx]
+	// Constants this body registers are keyed by the function they are
+	// used in (see translator.addrConsts), so the name has to be current
+	// before the body is compiled — outlined loop bodies included, which
+	// key to the function they were outlined from.
+	t.curFuncName = t.funcName(funcIdx)
+	defer func() { t.curFuncName = "" }()
 	body, err := t.compileBodyViaSSA(funcIdx, fn)
 	if err != nil {
 		return nil, fmt.Errorf("ssa: function %d (%s): %w", funcIdx, t.funcName(funcIdx), err)
@@ -3432,18 +3556,19 @@ func (t *translator) reportAddrConsts() {
 		fmt.Fprintln(os.Stderr, "wasm2go: -addr-consts: no static data in the module; nothing routed")
 		return
 	}
-	total := 0
+	consts, fns := 0, 0
 	files := map[int]bool{}
-	for file, tbl := range t.addrConsts {
-		total += len(tbl)
-		files[file] = true
+	for _, tables := range []map[int]map[string]*fnConstTable{t.addrConsts, t.addrConsts64} {
+		for file, perFile := range tables {
+			files[file] = true
+			fns += len(perFile)
+			for _, tbl := range perFile {
+				consts += len(tbl.vals)
+			}
+		}
 	}
-	for file, tbl := range t.addrConsts64 {
-		total += len(tbl)
-		files[file] = true
-	}
-	fmt.Fprintf(os.Stderr, "wasm2go: -addr-consts: static-data window [%d,%d), %d table slots over %d files\n",
-		lo, hi, total, len(files))
+	fmt.Fprintf(os.Stderr, "wasm2go: -addr-consts: static-data window [%d,%d), %d constants in %d functions over %d files\n",
+		lo, hi, consts, fns, len(files))
 }
 
 func (t *translator) reportMemMetrics() {

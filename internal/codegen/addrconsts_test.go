@@ -98,10 +98,13 @@ func translateAddrConsts(t *testing.T, opts codegen.Options) string {
 func TestAddrConstsTable(t *testing.T) {
 	src := translateAddrConsts(t, codegen.Options{AddrConsts: true})
 
-	if !strings.Contains(src, "const _a0 = 65600") {
+	// The name carries the function it is used in (this module has no name
+	// section, so the functions are fn<index>) and the ordinal within it,
+	// so nothing that happens elsewhere in the module can renumber it.
+	if !strings.Contains(src, "const _a_fn0_0 = 65600") {
 		t.Errorf("no address constant for the in-window address; got:\n%s", addrTableLine(src))
 	}
-	if !strings.Contains(src, "int32(_a0)") {
+	if !strings.Contains(src, "int32(_a_fn0_0)") {
 		t.Error("the in-window address does not read the constant")
 	}
 	if strings.Contains(src, "int32(65600)") {
@@ -114,14 +117,14 @@ func TestAddrConstsTable(t *testing.T) {
 			t.Errorf("%s was routed through a constant; only static-data addresses belong there", lit)
 		}
 	}
-	// The load's constant base is folded into the access offset and
-	// read from _consts (70000+8); giving it an address constant of its
-	// own would leave a declaration nothing reads.
-	if !strings.Contains(src, "_consts[") {
-		t.Error("the constant-base load no longer routes through _consts")
+	// The load's constant base is folded into the access offset and read
+	// from the function's own offset array (70000+8); giving it an
+	// address constant as well would leave a declaration nothing reads.
+	if !strings.Contains(src, "_c_fn3[0]") {
+		t.Error("the constant-base load no longer routes through the offset array")
 	}
-	if strings.Contains(src, "_a1") {
-		t.Error("the memory access base took an address slot of its own")
+	if strings.Contains(src, "_a_fn3_") {
+		t.Error("the memory access base took an address constant of its own")
 	}
 }
 
@@ -129,7 +132,7 @@ func TestAddrConstsTable(t *testing.T) {
 // constant stays the inline literal it has always been.
 func TestAddrConstsOffByDefault(t *testing.T) {
 	src := translateAddrConsts(t, codegen.Options{})
-	if strings.Contains(src, "_a0") {
+	if strings.Contains(src, "_a_") {
 		t.Error("an address constant appeared without Options.AddrConsts")
 	}
 	if !strings.Contains(src, "int32(65600)") {
@@ -147,14 +150,14 @@ func TestAddrConstsMaxOverride(t *testing.T) {
 	if !strings.Contains(src, "int32(65600)") {
 		t.Error("AddrConstsMax did not exclude the address at the window top")
 	}
-	if strings.Contains(src, "_a0") {
+	if strings.Contains(src, "_a_") {
 		t.Errorf("a constant was emitted although every address is outside the window: %s", addrTableLine(src))
 	}
 }
 
 func addrTableLine(src string) string {
 	for _, line := range strings.Split(src, "\n") {
-		if strings.HasPrefix(line, "const _a") {
+		if strings.HasPrefix(line, "const _a_") {
 			if len(line) > 200 {
 				return line[:200] + "..."
 			}
