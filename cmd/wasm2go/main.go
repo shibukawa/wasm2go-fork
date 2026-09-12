@@ -46,6 +46,8 @@ func main() {
 	fastMath := flag.Bool("fast-math", false, "allow asm splices that trade wasm bit-exactness for native-style rounding (SDOT raw grouping, FMA, SMMLA pairing)")
 	asmOverrides := flag.String("asm-overrides", "", "path of an assembly-override manifest: asm bodies the wasm's own project supplies for exported leaf functions (see docs/asm-overrides.md)")
 	fuseDebug := flag.Bool("fuse-debug", false, "print SIMD fusion diagnostics (failed window trials and loop-upgrade rejections) to stderr")
+	symbolNames := flag.Bool("symbol-names", false, "name generated functions after the wasm name section (F_<symbol>) instead of Fn<index>, and place them in chunk packages by name hash, so rebuilding the wasm from slightly changed sources leaves unrelated generated code untouched; requires -pure")
+	chunks := flag.Int("chunks", 0, "with -symbol-names: fixed number of chunk packages (0 = derive from the module size); pin it so the layout survives module growth")
 	directAsm := flag.String("direct-asm", "", "comma-separated function names (FnN / outlined FnNlH) to emit via the direct-asm backend instead of the gc-listing transform; unsupported functions fall back per function")
 	flag.Parse()
 
@@ -107,6 +109,8 @@ func main() {
 		AsmOverrides:        *asmOverrides,
 		FuseDebug:           *fuseDebug,
 		DirectAsmFuncs:      splitCommaList(*directAsm),
+		SymbolNames:         *symbolNames,
+		Chunks:              *chunks,
 	}
 
 	if wantsMulti {

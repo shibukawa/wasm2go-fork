@@ -57,6 +57,8 @@ wasm2go -dump -i module.wasm
 | `-keep-dead-funcs`    | Disable whole-function dead-code elimination (useful for diffing). |
 | `-entry-exports`      | Comma-separated list of export names that are DCE roots; the literal value `NONE` means no export is a root. |
 | `-promotion-report`   | Write the memory-promotion report (JSON: per-function frame/rodata/slab classification) to this path. |
+| `-symbol-names`       | Name the generated functions after the wasm name section (`F_<symbol>`, duplicates get a 1-based ordinal) instead of `Fn<index>`, and place them in chunk packages by name hash instead of by size. A wasm rebuilt from slightly changed sources then only changes the Go of the functions that changed. Requires `-pure`; functions without a name keep `Fn<index>`. Link with names kept (emscripten `--profiling-funcs`, or without `--strip-all`). |
+| `-chunks`             | With `-symbol-names`: fixed number of chunk packages (0 = derive from the module size). Pin it so the layout survives module growth. |
 
 The translator's output shape (SSA pipeline, data-sidecar layout,
 native `wasi_snapshot_preview1`, multi-package + linkname-split for

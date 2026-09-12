@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
 
 	"github.com/goccy/wasm2go/internal/wasm"
@@ -293,4 +294,63 @@ func tarjanSCC(n uint32, callees [][]uint32) [][]uint32 {
 		}
 	}
 	return sccs
+}
+
+// planStablePackages is the chunk planner for Options.SymbolNames: each
+// reachable function goes to chunk hash(name) % N, so a function keeps
+// its package for as long as it keeps its name — no matter how the
+// sizes of its neighbours change. N is nChunks when positive, otherwise
+// the number of chunkBytes-sized chunks the reachable bodies fill.
+// Mutually recursive functions are not kept together: cross-chunk calls
+// go through //go:linkname either way, and the loss is only the
+// occasional inlining opportunity. Within a chunk, functions are
+// ordered by index so an inserted function produces a local diff.
+func planStablePackages(mod *wasm.Module, chunkBytes, nChunks int, reachable map[uint32]bool, nameOf func(funcIdx uint32) string) (*MultiPackagePlan, error) {
+	if chunkBytes <= 0 {
+		chunkBytes = 1024 * 1024
+	}
+	nImports := mod.NumImportedFuncs
+	var live []uint32
+	total := 0
+	for i := range mod.Functions {
+		if reachable != nil && !reachable[uint32(i)] {
+			continue
+		}
+		live = append(live, uint32(i))
+		total += len(mod.Functions[i].Body)
+	}
+	n := nChunks
+	if n <= 0 {
+		n = (total + chunkBytes - 1) / chunkBytes
+	}
+	if n < 1 {
+		n = 1
+	}
+	buckets := make([][]uint32, n)
+	sizes := make([]int, n)
+	for _, f := range live {
+		h := fnv.New32a()
+		h.Write([]byte(nameOf(nImports + f)))
+		c := int(h.Sum32() % uint32(n))
+		buckets[c] = append(buckets[c], f)
+		sizes[c] += len(mod.Functions[f].Body)
+	}
+	plan := &MultiPackagePlan{FuncToChunk: map[uint32]int{}}
+	for c, funcs := range buckets {
+		if len(funcs) == 0 {
+			// Only tiny modules leave a chunk empty; dropping it keeps
+			// the chunk numbering dense. (A pinned nChunks larger than
+			// the function count is the one way to get here.)
+			continue
+		}
+		sort.Slice(funcs, func(a, b int) bool { return funcs[a] < funcs[b] })
+		chunk := MultiPackageChunk{FuncIdxs: make([]uint32, 0, len(funcs)), Bytes: sizes[c]}
+		idx := len(plan.Chunks)
+		for _, f := range funcs {
+			chunk.FuncIdxs = append(chunk.FuncIdxs, nImports+f)
+			plan.FuncToChunk[nImports+f] = idx
+		}
+		plan.Chunks = append(plan.Chunks, chunk)
+	}
+	return plan, nil
 }

@@ -60,7 +60,13 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		return Result{}, fmt.Errorf("linkname-split mode requires Options.OutputImportPath")
 	}
 	chunkBytes := currentMultiPackageThreshold()
-	plan, err := planLinknamePackagesWith(t.mod, chunkBytes, t.reachable, t.callees)
+	var plan *MultiPackagePlan
+	var err error
+	if t.opts.SymbolNames {
+		plan, err = planStablePackages(t.mod, chunkBytes, t.opts.Chunks, t.reachable, t.funcName)
+	} else {
+		plan, err = planLinknamePackagesWith(t.mod, chunkBytes, t.reachable, t.callees)
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("linkname-split plan: %w", err)
 	}

@@ -1780,3 +1780,16 @@ func TestMemory64Limits(t *testing.T) {
 		t.Error("unknown limits flags accepted")
 	}
 }
+
+// TestParseNameSectionFuncNames verifies that the function-names
+// subsection of a "name" custom section lands in Module.FuncNames.
+func TestParseNameSectionFuncNames(t *testing.T) {
+	// name section: "name", then subsection 1 (function names) with two
+	// entries: 0 -> "a", 3 -> "bc".
+	sub := []byte{0x02, 0x00, 0x01, 'a', 0x03, 0x02, 'b', 'c'}
+	payload := append([]byte{0x04, 'n', 'a', 'm', 'e', 0x01, byte(len(sub))}, sub...)
+	m := mustParseBytes(t, buildModule(encodeSection(0, payload)))
+	if m.FuncNames[0] != "a" || m.FuncNames[3] != "bc" || len(m.FuncNames) != 2 {
+		t.Errorf("FuncNames = %v, want {0:a 3:bc}", m.FuncNames)
+	}
+}

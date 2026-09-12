@@ -189,6 +189,13 @@ type Module struct {
 	NumImportedMems    uint32
 	NumImportedGlobals uint32
 	NumImportedTags    uint32
+
+	// FuncNames holds the function names from the custom "name"
+	// section (subsection 1), keyed by function index in the module's
+	// function index space (imports first). Nil when the module has
+	// no name section. Names are the linker's symbol names, so C
+	// static functions from different files may repeat.
+	FuncNames map[uint32]string
 }
 
 // FuncTypeOf returns the function type at the given function index, accounting

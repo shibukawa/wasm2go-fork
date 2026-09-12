@@ -96,8 +96,7 @@ func readHeader(r byteReader) error {
 func parseSection(m *Module, id byte, r byteReader, raw []byte) error {
 	switch id {
 	case 0:
-		// Custom section: name + bytes. Ignored for now.
-		return nil
+		return parseCustomSection(m, r)
 	case 1:
 		return parseTypeSection(m, r)
 	case 2:
@@ -711,3 +710,69 @@ type readerAt struct {
 
 func (a *readerAt) Read(p []byte) (int, error) { return a.r.Read(p) }
 func (a *readerAt) ReadByte() (byte, error)    { return a.r.ReadByte() }
+
+// parseCustomSection consumes the "name" custom section — only its
+// function-names subsection (id 1), which maps function indices to the
+// symbol names the linker saw. Every other custom section is ignored,
+// and so is a malformed name section: custom sections never make a
+// module invalid, and the names only feed diagnostics and Go
+// identifiers.
+func parseCustomSection(m *Module, r byteReader) error {
+	name, err := readName(r)
+	if err != nil {
+		return fmt.Errorf("custom section name: %w", err)
+	}
+	if name != "name" {
+		return nil
+	}
+	if names, err := parseNameSection(r); err == nil && names != nil {
+		m.FuncNames = names
+	}
+	return nil
+}
+
+// parseNameSection returns the function-names subsection of a name
+// section, or nil when the section has none.
+func parseNameSection(r byteReader) (map[uint32]string, error) {
+	var names map[uint32]string
+	for {
+		id, err := r.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return names, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		size, err := readU32(r)
+		if err != nil {
+			return nil, err
+		}
+		if size > maxSectionPayload {
+			return nil, fmt.Errorf("name subsection %d: payload size %d exceeds %d-byte safety cap", id, size, maxSectionPayload)
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
+		if id != 1 {
+			continue
+		}
+		sr := &readerAt{r: bufio.NewReader(bytes.NewReader(payload))}
+		n, err := readU32(sr)
+		if err != nil {
+			return nil, err
+		}
+		names = make(map[uint32]string, n)
+		for i := uint32(0); i < n; i++ {
+			idx, err := readU32(sr)
+			if err != nil {
+				return nil, err
+			}
+			fn, err := readName(sr)
+			if err != nil {
+				return nil, err
+			}
+			names[idx] = fn
+		}
+	}
+}

@@ -182,6 +182,23 @@ type Options struct {
 	// transform path, so listing a function here never breaks the
 	// build. Empty disables retention entirely.
 	DirectAsmFuncs []string
+	// SymbolNames names the generated functions after the module's
+	// name section (F_<symbol>, mangled to a Go identifier) instead of
+	// their function index (Fn<index>), and assigns functions to chunk
+	// packages by a hash of that name instead of by size-based bin
+	// packing. Both keep the generated code stable when the module is
+	// rebuilt from slightly different sources: an added or removed
+	// function no longer renumbers every function after it, and a
+	// function whose size changed no longer drags its neighbours into
+	// another package. Functions the name section does not cover keep
+	// Fn<index>. Requires PureOnly: the asm bundle derives the
+	// Fn<index> symbols on its own.
+	SymbolNames bool
+	// Chunks fixes the number of chunk packages in SymbolNames mode
+	// (0 derives it from the total function-body size). Pin it so a
+	// module that grows across a derived boundary does not reshuffle
+	// every function into a new package.
+	Chunks int
 }
 
 // DirectAsmFn is a function retained for direct-asm emission: its
@@ -303,6 +320,12 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	}
 	threshold := currentMultiPackageThreshold()
 	autoMultiPackage := totalBodyBytes > threshold
+	if opts.SymbolNames && !opts.PureOnly {
+		return Result{}, fmt.Errorf("wasm2go: Options.SymbolNames requires Options.PureOnly (the asm bundle names functions Fn<index>)")
+	}
+	if opts.Chunks < 0 {
+		return Result{}, fmt.Errorf("wasm2go: Options.Chunks must not be negative")
+	}
 
 	t := &translator{
 		mod:          m,
@@ -312,6 +335,9 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 		helpers:      map[string]bool{},
 		sidecars:     map[string][]byte{},
 		multiPackage: autoMultiPackage,
+	}
+	if opts.SymbolNames {
+		t.fnNames = symbolFuncNames(m, autoMultiPackage)
 	}
 	if len(opts.DirectAsmFuncs) > 0 {
 		t.directAsmSet = make(map[string]bool, len(opts.DirectAsmFuncs))
@@ -958,6 +984,10 @@ type translator struct {
 	plan         *MultiPackagePlan
 	currentChunk int
 
+	// fnNames maps a defined function's index to its symbol-derived Go
+	// name (Options.SymbolNames); functions missing here keep Fn<index>.
+	fnNames map[uint32]string
+
 	// linknameForwards records, per caller chunk, every funcIdx the caller
 	// references that is owned by a different chunk. The forward-decl
 	// emitter consumes this map to produce //go:linkname directives and
@@ -1081,10 +1111,94 @@ func (t *translator) importIfaceTypeRef(mod string) ast.Expr {
 // multi-package mode the name is exported (capitalized) so it crosses
 // package boundaries; in single-package mode it stays lowercase.
 func (t *translator) funcName(funcIdx uint32) string {
+	if name, ok := t.fnNames[funcIdx]; ok {
+		return name
+	}
 	if t.multiPackage {
 		return fmt.Sprintf("Fn%d", funcIdx)
 	}
 	return fmt.Sprintf("fn%d", funcIdx)
+}
+
+// symbolFuncNames derives the Go name of every defined function from
+// the module's name section. Names are mangled to Go identifiers and
+// prefixed — F_ in the multi-package layout, where cross-package
+// linknames need exported symbols, f_ otherwise. Duplicates (C static
+// functions from different files) get a 1-based ordinal in function-
+// index order, so a repeated name only renumbers its own namesakes.
+// Functions the name section does not cover are left out and fall
+// back to Fn<index>.
+//
+// Binaryen already makes repeated names unique when it writes the
+// name section, by appending the function's index at that stage
+// (heap_getattr, heap_getattr_1883, heap_getattr_2196). That index
+// moves with every function added before it, which is exactly the
+// churn this mode exists to avoid, so such a `_<digits>` suffix is
+// dropped and the ordinal scheme numbers the namesakes instead. The
+// suffix is recognised when the bare name is also a function of the
+// module, or when the number exceeds the function's own index — the
+// index Binaryen appended predates its dead-code elimination, so it
+// is never smaller than the final one, whereas a genuine trailing
+// number (utf8_to_euc_jis_2004) is almost always smaller. A genuine
+// number larger than the index (conv_utf8_to_18030) is dropped too;
+// the name stays unique, just shorter.
+func symbolFuncNames(m *wasm.Module, exported bool) map[uint32]string {
+	prefix := "f_"
+	if exported {
+		prefix = "F_"
+	}
+	raw := make([]string, len(m.Functions))
+	present := map[string]bool{}
+	for i := range raw {
+		raw[i] = m.FuncNames[m.NumImportedFuncs+uint32(i)]
+		present[raw[i]] = true
+	}
+	base := make([]string, len(m.Functions))
+	count := map[string]int{}
+	for i, name := range raw {
+		if name == "" {
+			continue
+		}
+		if bare, n, ok := stripIndexSuffix(name); ok && (present[bare] || n > uint64(m.NumImportedFuncs)+uint64(i)) {
+			name = bare
+		}
+		base[i] = prefix + MangleID(name)
+		count[base[i]]++
+	}
+	out := make(map[uint32]string, len(base))
+	taken := map[string]bool{}
+	ordinal := map[string]int{}
+	for i, b := range base {
+		if b == "" {
+			continue
+		}
+		name := b
+		if count[b] > 1 {
+			ordinal[b]++
+			name = fmt.Sprintf("%s_%d", b, ordinal[b])
+		}
+		for taken[name] {
+			name += "_"
+		}
+		taken[name] = true
+		out[m.NumImportedFuncs+uint32(i)] = name
+	}
+	return out
+}
+
+// stripIndexSuffix splits a linker-uniquified name such as
+// heap_getattr_1883 into its bare form and the number; ok is false
+// when the name does not end in `_<digits>`.
+func stripIndexSuffix(name string) (bare string, n uint64, ok bool) {
+	i := strings.LastIndexByte(name, '_')
+	if i <= 0 || i == len(name)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.ParseUint(name[i+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return name[:i], n, true
 }
 
 // importMethodName returns the method name for a wasm import. Always
@@ -3427,8 +3541,13 @@ func (t *translator) emitExportWrappers() ([]ast.Decl, error) {
 		if _, dup := emittedMethods[methodName]; dup {
 			// Two export names mangle to the same Go identifier (e.g.
 			// relation_close vs RelationClose): keep both by suffixing the
-			// later one with its function index.
-			methodName = fmt.Sprintf("%s_%d", methodName, exp.Index)
+			// later one with its own export name, which — unlike the
+			// function index — does not change when the module is
+			// rebuilt.
+			methodName = fmt.Sprintf("%s_%s", methodName, MangleID(exp.Name))
+			for _, dup := emittedMethods[methodName]; dup; _, dup = emittedMethods[methodName] {
+				methodName += "_"
+			}
 		}
 		emittedMethods[methodName] = exp.Name
 
