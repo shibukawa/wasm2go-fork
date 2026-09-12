@@ -80,6 +80,47 @@ wasm2go -pure -symbol-names -chunks 6 -i module.wasm -out-dir gen \
   -pkg gen -import example.com/proj/gen
 ```
 
+### `-group-files`: one file per subject instead of one per package
+
+`-symbol-names` alone still writes each chunk package as a single
+`pN.go` of 13-21 MB, which diff viewers refuse to render and editors
+struggle with. `-group-files` spreads the function bodies of a package
+over files named after what the functions operate on; `pN.go` keeps the
+constant table and the element-segment initializers.
+
+The group of a function is the first token of its symbol name that is
+not a verb — `get_relation_info` and `RelationGetRelid` both file under
+`relation.go` — lower-cased; a single-letter token is glued to its
+successor (`x_log`). Tokens come from underscores, or from camel-case
+boundaries when the name has none. The built-in verb list (get, set,
+new, free, is, has, check, make, ...) can be replaced with
+`-group-verbs a,b,c` (`NONE` skips nothing).
+
+Sizes are judged over the whole module so a group has the same file
+name in every package it touches:
+
+- a group with fewer than `-group-min` functions (8) goes to the misc
+  pool, `misc_<leading letters of the name>.go`, deepened one letter at
+  a time until each file fits;
+- a group whose source per package exceeds `-group-max-bytes` (512 KiB)
+  is split by its next token (`pg_stat.go`, `pg_finfo.go`; sub-groups
+  below the minimum stay with the parent), then by leading letters;
+- a single function above `-group-huge-bytes` (128 KiB) gets
+  `<group>_<name>.go` to itself.
+
+Every split is derived from names — there is no hashing or numbering —
+so a rebuilt module keeps every file it does not touch; only a group
+that crosses a threshold changes shape. File names are sanitized so the
+go tool reads them as plain package source (no `_test`, GOOS or GOARCH
+suffixes, no leading underscore).
+
+Usage (with the same `-pure -symbol-names` prerequisites):
+
+```
+wasm2go -pure -symbol-names -chunks 6 -group-files -i module.wasm \
+  -out-dir gen -pkg gen -import example.com/proj/gen
+```
+
 ### Export method name collisions
 
 Two exports can mangle to the same Go method (`relation_close` and
@@ -109,7 +150,7 @@ time and fails without it. The fork's own tests avoid that:
 
 ```
 go test ./internal/wasm -run 'NameSection|CustomSection'
-go test ./internal/codegen -run 'SymbolNames|SymbolFuncNames'
+go test ./internal/codegen -run 'SymbolNames|SymbolFuncNames|Group'
 go test ./internal/gcasm -run Align
 ```
 

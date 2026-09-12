@@ -7,7 +7,9 @@ import (
 	"go/format"
 	"go/token"
 	"path"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/goccy/wasm2go/internal/asmgen"
 	"github.com/goccy/wasm2go/internal/wasm"
@@ -76,6 +78,13 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 
 	// Step 1: compile all chunk bodies (no serialization yet).
 	chunkBodies := make(map[int][]ast.Decl, len(plan.Chunks))
+	// chunkFuncs keeps each function's decls (its body plus outlined
+	// loops) apart so GroupFiles can route them to separate files.
+	type chunkFunc struct {
+		idx   uint32
+		decls []ast.Decl
+	}
+	chunkFuncs := make(map[int][]chunkFunc, len(plan.Chunks))
 	for chunkIdx, chunk := range plan.Chunks {
 		t.currentChunk = chunkIdx
 		var bodies []ast.Decl
@@ -85,8 +94,50 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 				return Result{}, err
 			}
 			bodies = append(bodies, decls...)
+			chunkFuncs[chunkIdx] = append(chunkFuncs[chunkIdx], chunkFunc{fIdx, decls})
 		}
 		chunkBodies[chunkIdx] = bodies
+	}
+	// groupStem maps a generated function name to its group file stem
+	// (GroupFiles). Groups are sized over the whole module, so a file
+	// stem recurs in every package holding members of that group; the
+	// per-file maximum is therefore scaled by the package count.
+	var groupStem map[string]string
+	if t.opts.GroupFiles {
+		verbs := map[string]bool{}
+		list := t.opts.GroupVerbs
+		if list == nil {
+			list = defaultGroupVerbs
+		}
+		for _, v := range list {
+			verbs[strings.ToLower(v)] = true
+		}
+		// Sizes come from rendering each function once; the same
+		// rendering happens again per file below, which is cheaper than
+		// guessing sizes from the AST.
+		var all []groupFunc
+		for chunkIdx := range plan.Chunks {
+			for _, cf := range chunkFuncs[chunkIdx] {
+				buf := &bytes.Buffer{}
+				for _, d := range cf.decls {
+					if err := format.Node(buf, t.fset, d); err != nil {
+						return Result{}, fmt.Errorf("size %s: %w", t.funcName(cf.idx), err)
+					}
+					buf.WriteByte('\n')
+				}
+				all = append(all, groupFunc{name: t.funcName(cf.idx), symbol: t.mod.FuncNames[cf.idx], size: buf.Len()})
+			}
+		}
+		maxBytes := t.opts.GroupMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultGroupMaxBytes
+		}
+		groupStem = map[string]string{}
+		for stem, members := range groupFiles(all, verbs, t.opts.GroupMin, maxBytes*len(plan.Chunks), t.opts.GroupHugeBytes) {
+			for _, m := range members {
+				groupStem[m.name] = stem
+			}
+		}
 	}
 
 	// Step 2: emit helpers (adds helpers' stdlib imports to t.imports).
@@ -141,6 +192,12 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		t.currentChunk = chunkIdx
 		pkgFile := &ast.File{Name: newID(fmt.Sprintf("p%d", chunkIdx))}
 		bodies := chunkBodies[chunkIdx]
+		if t.opts.GroupFiles {
+			// The function bodies go to the group files below; pN.go
+			// keeps the constant table, the element-segment
+			// initializers and the compile-order chain.
+			bodies = nil
+		}
 		if extras := t.chunkExtraDecls[chunkIdx]; len(extras) > 0 {
 			bodies = append(bodies, extras...)
 		}
@@ -178,6 +235,13 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		if decl := t.emitLargeConstsDecl(chunkIdx); decl != nil {
 			pkgFile.Decls = append(pkgFile.Decls, decl)
 		}
+		if t.opts.GroupFiles {
+			// Nothing left in pN.go may mention base; keep its import
+			// alive so the file compiles whatever the extras are.
+			pkgFile.Decls = append(pkgFile.Decls, &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{
+				&ast.ValueSpec{Names: []*ast.Ident{newID("_")}, Type: &ast.StarExpr{X: &ast.SelectorExpr{X: newID("base"), Sel: newID("Module")}}},
+			}})
+		}
 		pkgFile.Decls = append(pkgFile.Decls, bodies...)
 
 		path := fmt.Sprintf("p%d/p%d.go", chunkIdx, chunkIdx)
@@ -186,6 +250,57 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 			return Result{}, fmt.Errorf("format chunk p%d: %w", chunkIdx, err)
 		}
 		files[path] = buf.Bytes()
+
+		if t.opts.GroupFiles {
+			pkg := fmt.Sprintf("p%d", chunkIdx)
+			byName := map[string][]ast.Decl{}
+			members := map[string][]string{} // stem -> names, sorted below
+			for _, cf := range chunkFuncs[chunkIdx] {
+				name := t.funcName(cf.idx)
+				byName[name] = cf.decls
+				members[groupStem[name]] = append(members[groupStem[name]], name)
+			}
+			reserved := map[string]bool{pkg: true, "alias": true, pkg + "_pure": true, "base": true}
+			render := func(names []string) ([]byte, error) {
+				gf := &ast.File{Name: newID(pkg)}
+				var decls []ast.Decl
+				for _, name := range names {
+					decls = append(decls, byName[name]...)
+				}
+				gimports := []*ast.ImportSpec{{
+					Name: newID("base"),
+					Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(t.opts.OutputImportPath + "/base")},
+				}}
+				for _, p := range scanStdlibRefs(decls) {
+					gimports = append(gimports, &ast.ImportSpec{Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p)}})
+				}
+				gf.Decls = append(gf.Decls, &ast.GenDecl{Tok: token.IMPORT, Specs: importsAsSpecs(gimports)})
+				gf.Decls = append(gf.Decls, decls...)
+				buf := &bytes.Buffer{}
+				if err := format.Node(buf, t.fset, gf); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			}
+			put := func(stem string, content []byte) error {
+				rel := pkg + "/" + groupFileName(stem, reserved)
+				if _, dup := files[rel]; dup {
+					return fmt.Errorf("group file %s emitted twice", rel)
+				}
+				files[rel] = content
+				return nil
+			}
+			for stem, names := range members {
+				sort.Strings(names)
+				content, err := render(names)
+				if err != nil {
+					return Result{}, fmt.Errorf("format %s/%s: %w", pkg, stem, err)
+				}
+				if err := put(stem, content); err != nil {
+					return Result{}, err
+				}
+			}
+		}
 
 		// Per-chunk alias files — see emitChunkAliasFiles for the
 		// per-arch split (wrapper-pair on amd64/arm64, bare alias on

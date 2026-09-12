@@ -126,3 +126,58 @@ func keys(m map[string]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// With GroupFiles every function body lands in a file named after its
+// group; pN.go keeps only the shared declarations, and the tree still
+// builds.
+func TestGroupFilesLayoutBuilds(t *testing.T) {
+	restore := codegen.SetMultiPackageThreshold(0)
+	defer restore()
+	res, err := codegen.Translate(nil, readPrebuilt(t, "symnames.wasm"), codegen.Options{
+		Package: "wmod", OutputImportPath: "gentest/wmod",
+		PureOnly: true, SymbolNames: true, Chunks: 1,
+		GroupFiles: true, GroupMin: 1, GroupVerbs: []string{"sum", "store"},
+	})
+	if err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	for _, want := range []string{"p0/square.go", "p0/twice.go", "p0/report.go", "p0/of.go", "p0/at.go", "p0/p0.go"} {
+		if _, ok := res.Files[want]; !ok {
+			t.Errorf("missing %s (have %v)", want, keys(fileNames(res.Files)))
+		}
+	}
+	if funcDeclRe.Match(res.Files["p0/p0.go"]) {
+		t.Errorf("p0/p0.go still holds function bodies")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module gentest\n\ngo 1.25.0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for rel, data := range res.Files {
+		p := filepath.Join(dir, "wmod", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, data := range res.Sidecars {
+		if err := os.WriteFile(filepath.Join(dir, "wmod", name), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("go", "build", "./...")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+}
+
+func fileNames(files map[string][]byte) map[string]string {
+	out := map[string]string{}
+	for k := range files {
+		out[k] = ""
+	}
+	return out
+}

@@ -199,6 +199,31 @@ type Options struct {
 	// module that grows across a derived boundary does not reshuffle
 	// every function into a new package.
 	Chunks int
+	// GroupFiles spreads each chunk package's function bodies over
+	// files named after the functions' subject (heap.go, relation.go,
+	// pg_stat.go) instead of one pN.go per package: the first token
+	// of the symbol name that is not a verb, lower-cased. Groups
+	// smaller than GroupMin share misc_<letter>.go; groups larger than
+	// GroupMax are split by the next token, then by name hash. pN.go
+	// keeps the constant table and the element-segment initializers.
+	// Requires SymbolNames. See groupfiles.go.
+	GroupFiles bool
+	// GroupVerbs replaces the built-in list of leading tokens that are
+	// skipped when choosing a group (get, set, new, free, is, ...).
+	// nil keeps the default; an empty, non-nil slice skips nothing.
+	GroupVerbs []string
+	// GroupMin is the smallest group that gets a file of its own
+	// (0 = 8 functions); smaller ones pool into misc_*.
+	GroupMin int
+	// GroupMaxBytes caps a group file's size per package: a group
+	// whose source (module-wide, divided by the package count) would
+	// exceed it is split by its next token, then by leading letters.
+	// 0 = 512 KiB.
+	GroupMaxBytes int
+	// GroupHugeBytes is the size above which a single function
+	// (conversion tables, node printers) gets <group>_<name>.go to
+	// itself. 0 = 128 KiB.
+	GroupHugeBytes int
 }
 
 // DirectAsmFn is a function retained for direct-asm emission: its
@@ -325,6 +350,9 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	}
 	if opts.Chunks < 0 {
 		return Result{}, fmt.Errorf("wasm2go: Options.Chunks must not be negative")
+	}
+	if opts.GroupFiles && !opts.SymbolNames {
+		return Result{}, fmt.Errorf("wasm2go: Options.GroupFiles requires Options.SymbolNames (files are grouped by symbol name)")
 	}
 
 	t := &translator{

@@ -48,6 +48,11 @@ func main() {
 	fuseDebug := flag.Bool("fuse-debug", false, "print SIMD fusion diagnostics (failed window trials and loop-upgrade rejections) to stderr")
 	symbolNames := flag.Bool("symbol-names", false, "name generated functions after the wasm name section (F_<symbol>) instead of Fn<index>, and place them in chunk packages by name hash, so rebuilding the wasm from slightly changed sources leaves unrelated generated code untouched; requires -pure")
 	chunks := flag.Int("chunks", 0, "with -symbol-names: fixed number of chunk packages (0 = derive from the module size); pin it so the layout survives module growth")
+	groupFiles := flag.Bool("group-files", false, "with -symbol-names: write each chunk package's function bodies to files named after the functions' subject (heap.go, relation.go, pg_stat.go; leading verbs such as get/set/new are skipped) instead of one pN.go per package")
+	groupVerbs := flag.String("group-verbs", "", "with -group-files: comma-separated list of leading tokens to skip when naming a group (replaces the built-in verb list; \"NONE\" skips nothing)")
+	groupMin := flag.Int("group-min", 0, "with -group-files: groups with fewer functions share misc_<letter>.go (0 = 8)")
+	groupMaxBytes := flag.Int("group-max-bytes", 0, "with -group-files: a group whose source per package exceeds this many bytes is split by its next token, then by leading letters (0 = 524288)")
+	groupHugeBytes := flag.Int("group-huge-bytes", 0, "with -group-files: a single function larger than this gets <group>_<name>.go to itself (0 = 131072)")
 	directAsm := flag.String("direct-asm", "", "comma-separated function names (FnN / outlined FnNlH) to emit via the direct-asm backend instead of the gc-listing transform; unsupported functions fall back per function")
 	flag.Parse()
 
@@ -111,6 +116,11 @@ func main() {
 		DirectAsmFuncs:      splitCommaList(*directAsm),
 		SymbolNames:         *symbolNames,
 		Chunks:              *chunks,
+		GroupFiles:          *groupFiles,
+		GroupVerbs:          parseGroupVerbs(*groupVerbs),
+		GroupMin:            *groupMin,
+		GroupMaxBytes:       *groupMaxBytes,
+		GroupHugeBytes:      *groupHugeBytes,
 	}
 
 	if wantsMulti {
@@ -304,4 +314,16 @@ func printSummary(w io.Writer, m *wasm.Module) error {
 		ew.Fprintf("start:    func %d\n", *m.Start)
 	}
 	return ew.err
+}
+
+// parseGroupVerbs turns the -group-verbs value into Options.GroupVerbs:
+// "" keeps the built-in list (nil), "NONE" skips nothing (empty slice).
+func parseGroupVerbs(v string) []string {
+	if v == "" {
+		return nil
+	}
+	if v == "NONE" {
+		return []string{}
+	}
+	return splitCommaList(v)
 }
