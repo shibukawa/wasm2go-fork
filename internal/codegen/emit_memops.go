@@ -68,7 +68,7 @@ func (em *ssaEmitter) emitMemLoadExpr(v *ssa.Value, emitExpr func(*ssa.Value) (a
 	if !ok {
 		return nil, fmt.Errorf("emitMemLoadExpr: not a load op: %v", v.Op)
 	}
-	baseExpr, err := emitExpr(v.Args[0])
+	baseExpr, err := em.emitMemBaseExpr(v.Args[0], emitExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (em *ssaEmitter) emitMemStoreStmt(v *ssa.Value, emitExpr func(*ssa.Value) (
 	if !ok {
 		return nil, fmt.Errorf("emitMemStoreStmt: not a store op: %v", v.Op)
 	}
-	baseExpr, err := emitExpr(v.Args[0])
+	baseExpr, err := em.emitMemBaseExpr(v.Args[0], emitExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +171,28 @@ func (em *ssaEmitter) memBasePtrExpr() ast.Expr {
 		return newID(memBaseLocal)
 	}
 	return &ast.SelectorExpr{X: newID("m"), Sel: newID("M")}
+}
+
+// emitMemBaseExpr emits a memory access's base operand. A base that is
+// a compile-time constant is emitted with the _addr table suppressed:
+// memOffsetExpr recovers the constant from the SSA value and folds it
+// together with the access's static offset into one _consts entry,
+// dropping this expression on the floor — registering an _addr slot for
+// it would leave the table carrying entries no body reads. Runtime
+// bases are emitted normally, so an address constant deeper in the
+// address arithmetic still goes through the table.
+func (em *ssaEmitter) emitMemBaseExpr(base *ssa.Value, emitExpr func(*ssa.Value) (ast.Expr, error)) (ast.Expr, error) {
+	isConst := ssaConstBase(base) != nil
+	if em.mem64 {
+		isConst = ssaConstBase64(base) != nil
+	}
+	if !isConst {
+		return emitExpr(base)
+	}
+	prev := em.noAddrConsts
+	em.noAddrConsts = true
+	defer func() { em.noAddrConsts = prev }()
+	return emitExpr(base)
 }
 
 // memOffsetExpr returns the integer offset passed to unsafe.Add. It
@@ -527,7 +549,7 @@ func (em *ssaEmitter) emitAtomicInline(v *ssa.Value, name string, emitExpr func(
 		}
 		offU = uint64(uint32(off.AuxInt))
 	}
-	baseExpr, err := emitExpr(v.Args[0])
+	baseExpr, err := em.emitMemBaseExpr(v.Args[0], emitExpr)
 	if err != nil {
 		return nil, false, err
 	}

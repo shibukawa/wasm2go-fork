@@ -63,6 +63,13 @@ type ssaEmitter struct {
 	// curFn is the function whose body is being emitted; the fusion
 	// pass keys direct-asm window retention off its name.
 	curFn *ssa.Func
+
+	// noAddrConsts suppresses the _addr table for the constant being
+	// emitted right now. Set only while a memory access's base operand
+	// is emitted: memOffsetExpr folds a constant base into the access's
+	// total offset and discards the expression, so a slot registered
+	// there would be one nothing ever reads. See emitMemBaseExpr.
+	noAddrConsts bool
 }
 
 // simdCallMark records, for one emitted SIMD helper call, which
@@ -948,9 +955,9 @@ func (em *ssaEmitter) emitOp(v *ssa.Value, emit func(*ssa.Value) (ast.Expr, erro
 	case ssa.OpParam:
 		return newID(fmt.Sprintf("l%d", v.AuxInt)), nil
 	case ssa.OpConst32:
-		return goConstI32(int32(v.AuxInt)), nil
+		return em.addrConstExpr32(int32(v.AuxInt)), nil
 	case ssa.OpConst64:
-		return goConstI64(v.AuxInt), nil
+		return em.addrConstExpr64(v.AuxInt), nil
 	case ssa.OpTrunc64To32:
 		// wasm i32.wrap_i64 semantics: low 32 bits.
 		a, err := emit(v.Args[0])
@@ -1523,6 +1530,56 @@ func (em *ssaEmitter) wasmExcType() ast.Expr {
 		return newID("wasmExc")
 	}
 	return em.t.wasmExcTypeExpr()
+}
+
+// addrConstExpr32 renders an i32 constant: a static-data address goes
+// through the emitted file's _addr table (Options.AddrConsts),
+// everything else stays the inline `int32(N)` literal. A memory64
+// module holds its addresses in i64, so there every i32 constant is an
+// ordinary integer (a mask, a size) and stays inline.
+//
+// The point is diff stability, not code generation: an address literal
+// is the only thing in a function body that a rebuild from slightly
+// changed sources reliably rewrites, because inserting one string
+// literal shifts every address above it. `int32(_a<k>)` keeps the body
+// identical and moves the shifted values into one declaration per file.
+// Because _a<k> is a named CONSTANT, the expression stays a constant
+// expression and the compiled code is bit-identical to the literal's —
+// unlike the _consts table, which is a var precisely so that large
+// access offsets cannot be folded into an addressing immediate.
+func (em *ssaEmitter) addrConstExpr32(n int32) ast.Expr {
+	if em.mem64 || !em.addrConstsEnabled() {
+		return goConstI32(n)
+	}
+	lo, hi := em.t.staticDataRange()
+	if u := uint64(uint32(n)); u < lo || u >= hi {
+		return goConstI32(n)
+	}
+	return &ast.CallExpr{
+		Fun:  newID("int32"),
+		Args: []ast.Expr{newID(addrConstPrefix + strconv.Itoa(em.t.useAddrConst(uint32(n))))},
+	}
+}
+
+// addrConstExpr64 is addrConstExpr32 for i64 constants. Only a
+// memory64 module holds addresses in i64, so on a 32-bit memory every
+// i64 constant stays inline.
+func (em *ssaEmitter) addrConstExpr64(n int64) ast.Expr {
+	if !em.mem64 || !em.addrConstsEnabled() || n < 0 {
+		return goConstI64(n)
+	}
+	lo, hi := em.t.staticDataRange()
+	if u := uint64(n); u < lo || u >= hi {
+		return goConstI64(n)
+	}
+	return &ast.CallExpr{
+		Fun:  newID("int64"),
+		Args: []ast.Expr{newID(addrConstPrefix64 + strconv.Itoa(em.t.useAddrConst64(uint64(n))))},
+	}
+}
+
+func (em *ssaEmitter) addrConstsEnabled() bool {
+	return em.t != nil && em.t.opts.AddrConsts && !em.noAddrConsts
 }
 
 func goConstI32(n int32) ast.Expr {

@@ -235,6 +235,7 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		if decl := t.emitLargeConstsDecl(chunkIdx); decl != nil {
 			pkgFile.Decls = append(pkgFile.Decls, decl)
 		}
+		pkgFile.Decls = append(pkgFile.Decls, t.emitAddrConstsDecls(chunkIdx)...)
 		if t.opts.GroupFiles {
 			// Nothing left in pN.go may mention base; keep its import
 			// alive so the file compiles whatever the extras are.
@@ -375,6 +376,7 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 	if decl := t.emitLargeConstsDecl(-1); decl != nil {
 		mainFile.Decls = append(mainFile.Decls, decl)
 	}
+	mainFile.Decls = append(mainFile.Decls, t.emitAddrConstsDecls(-1)...)
 	mainFile.Decls = append(mainFile.Decls, mainDecls...)
 	{
 		buf := &bytes.Buffer{}
@@ -425,6 +427,7 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 	}
 
 	t.reportMemMetrics()
+	t.reportAddrConsts()
 	t.appendSimdHelperFiles(files)
 	t.appendDirectAsmLayoutFile(files)
 	res := Result{Files: files, Sidecars: sidecars, FusedSimd: t.FusedTrees(), FusedLoops: t.FusedLoops(), Outlined: t.outlinedByChunk, OutlinedSigs: t.outlinedSigs, DirectAsmSSA: t.directAsmSSA}

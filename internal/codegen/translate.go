@@ -224,6 +224,22 @@ type Options struct {
 	// (conversion tables, node printers) gets <group>_<name>.go to
 	// itself. 0 = 128 KiB.
 	GroupHugeBytes int
+	// AddrConsts routes every constant that lands in the module's
+	// static-data window (see staticDataRange) through the emitted
+	// file's `_addr` table instead of an inline literal, the way
+	// large memory-access offsets already go through `_consts`.
+	// Static data addresses are the one thing a rebuild from slightly
+	// changed sources moves wholesale: adding a string literal shifts
+	// every address after it, and the shifted values otherwise appear
+	// in the body of every function that passes a pointer (a format
+	// string, a global's address). With the table, a pure layout shift
+	// changes one table line per file and leaves every body byte for
+	// byte identical. See useAddrConst.
+	AddrConsts bool
+	// AddrConstsMax overrides the top of the static-data window that
+	// AddrConsts routes through the table (0 = derive it from the
+	// module). Values at or above it stay inline literals.
+	AddrConstsMax uint64
 }
 
 // DirectAsmFn is a function retained for direct-asm emission: its
@@ -560,6 +576,8 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	if decl := t.emitLargeConstsDecl(t.currentChunk); decl != nil {
 		out.Decls = append(out.Decls, decl)
 	}
+	// Package-level static-data address table (Options.AddrConsts).
+	out.Decls = append(out.Decls, t.emitAddrConstsDecls(t.currentChunk)...)
 
 	// Export wrappers.
 	exportDecls, err := t.emitExportWrappers()
@@ -614,6 +632,7 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	t.reportMemMetrics()
+	t.reportAddrConsts()
 	shared, err := t.emitSharedImage(opts.Package)
 	if err != nil {
 		return Result{}, err
@@ -1055,6 +1074,23 @@ type translator struct {
 	// runs <const value> -> <slot index in the table>.
 	largeConsts map[int]map[uint64]int
 
+	// addrConsts records, per emitted file, the unique static-data
+	// addresses that appeared as plain i32 constants — a pointer
+	// passed to a callee, a global variable's address, anything the
+	// memory-access path did not already fold into `_consts`. Keyed
+	// like largeConsts (file index -> value -> slot), and emitted as
+	// `var _addr = [N]int32{...}`. Only populated under
+	// Options.AddrConsts; addrConsts64 is its i64 counterpart, used
+	// on a memory64 module where addresses are i64.
+	addrConsts   map[int]map[uint32]int
+	addrConsts64 map[int]map[uint64]int
+
+	// dataRange caches staticDataRange: [lo, hi) of the module's
+	// static-data addresses. dataRangeDone separates "not computed"
+	// from "computed, and the module has no static data".
+	dataRangeLo, dataRangeHi uint64
+	dataRangeDone            bool
+
 	// memMetrics accumulates the memory-promotion observability
 	// data: every SSA-lowered function's load/store classification is
 	// folded in here, then reported once codegen finishes.
@@ -1424,6 +1460,189 @@ func (t *translator) emitLargeConstsDecl(file int) ast.Decl {
 			Names:  []*ast.Ident{newID("_consts")},
 			Values: []ast.Expr{&ast.CompositeLit{Type: arrType, Elts: values}},
 		}},
+	}
+}
+
+// staticDataRange returns the [lo, hi) window of linear-memory
+// addresses that a constant in the program text may be pointing at:
+// the module's data segments plus the .bss that follows them. It is
+// the classifier behind Options.AddrConsts.
+//
+// lo is the lowest data-segment destination, floored at
+// largeConstThreshold — below 4 KiB a constant is far more likely to
+// be an ordinary small integer (a size, a mask, a struct offset) than
+// a pointer, and the head of the data section is also the part a
+// rebuild almost never moves.
+//
+// hi has to cover .bss, which has no data segment of its own: LLVM
+// lays out data, then .bss, then the shadow stack, so the highest
+// constant global initializer above the data segments (wasm-ld's
+// __stack_pointer) bounds the static region from above. Failing that
+// (no such global) the last data segment's end is the bound, and
+// addresses in .bss keep their inline literals. Options.AddrConstsMax
+// overrides the derivation.
+//
+// Classifying loosely is safe: the table stores the exact value, so a
+// constant that is not really an address only costs a table slot and a
+// load. Classifying too narrowly only costs churn.
+func (t *translator) staticDataRange() (uint64, uint64) {
+	if t.dataRangeDone {
+		return t.dataRangeLo, t.dataRangeHi
+	}
+	t.dataRangeDone = true
+	lo, end := ^uint64(0), uint64(0)
+	note := func(off uint64, length int) {
+		if off < lo {
+			lo = off
+		}
+		if e := off + uint64(length); e > end {
+			end = e
+		}
+	}
+	var placements map[int]int64
+	if t.hasPassiveData() {
+		placements = t.passiveSegmentPlacements()
+	}
+	for i, ds := range t.mod.Datas {
+		if ds.Passive {
+			// A passive segment's destination is the constant
+			// memory.init the start function issues, recovered by
+			// passiveSegmentPlacements; segments it could not place
+			// (no constant destination) are left out of the window.
+			if off, ok := placements[i]; ok {
+				note(uint64(off), len(ds.Bytes))
+			}
+			continue
+		}
+		off, err := evalConstExprI64(ds.Offset, t.mod)
+		if err != nil {
+			continue
+		}
+		note(uint64(off), len(ds.Bytes))
+	}
+	if lo == ^uint64(0) {
+		return 0, 0 // no static data: the window is empty, nothing routes
+	}
+	if lo < largeConstThreshold {
+		lo = largeConstThreshold
+	}
+	hi := end
+	if max := t.opts.AddrConstsMax; max != 0 {
+		hi = max
+	} else {
+		// The shadow stack's top (__stack_pointer's initializer) sits
+		// above .bss. Cap by the declared initial memory so a global
+		// holding an unrelated large value cannot open the window onto
+		// the whole 32-bit space.
+		memBytes := ^uint64(0)
+		if len(t.mod.Memories) > 0 {
+			memBytes = t.mod.Memories[0].Limits.Min * 65536
+		}
+		for _, g := range t.mod.Globals {
+			v, err := evalConstExprI64(g.Init, t.mod)
+			if err != nil || v < 0 {
+				continue
+			}
+			if u := uint64(v); u > hi && u <= memBytes {
+				hi = u
+			}
+		}
+	}
+	if hi <= lo {
+		return 0, 0
+	}
+	t.dataRangeLo, t.dataRangeHi = lo, hi
+	return lo, hi
+}
+
+// useAddrConst registers a static-data address for the current file's
+// _addr table and returns its slot, the way useLargeConst does for
+// _consts. Slots are handed out in first-use order, so a rebuild that
+// only moves the data keeps every slot where it was and rewrites the
+// table's values alone.
+func (t *translator) useAddrConst(value uint32) int {
+	if t.addrConsts == nil {
+		t.addrConsts = map[int]map[uint32]int{}
+	}
+	tbl := t.addrConsts[t.currentChunk]
+	if tbl == nil {
+		tbl = map[uint32]int{}
+		t.addrConsts[t.currentChunk] = tbl
+	}
+	if idx, ok := tbl[value]; ok {
+		return idx
+	}
+	idx := len(tbl)
+	tbl[value] = idx
+	return idx
+}
+
+// useAddrConst64 is useAddrConst for a memory64 module's i64
+// addresses; the two tables are separate so neither access site needs
+// a conversion.
+func (t *translator) useAddrConst64(value uint64) int {
+	if t.addrConsts64 == nil {
+		t.addrConsts64 = map[int]map[uint64]int{}
+	}
+	tbl := t.addrConsts64[t.currentChunk]
+	if tbl == nil {
+		tbl = map[uint64]int{}
+		t.addrConsts64[t.currentChunk] = tbl
+	}
+	if idx, ok := tbl[value]; ok {
+		return idx
+	}
+	idx := len(tbl)
+	tbl[value] = idx
+	return idx
+}
+
+// emitAddrConstsDecls returns the address table for the given file: one
+// `const _a0, _a1, ... = <addr>, <addr>, ...` declaration (and its i64
+// counterpart `_a64_0, ...` on a memory64 module), or nil when nothing
+// registered.
+//
+// A named constant, not a variable: the bodies that read it stay
+// constant expressions, so the Go compiler folds the address into the
+// instruction stream exactly as it folded the literal and the generated
+// machine code is unchanged. The declaration is what absorbs a layout
+// shift — one spec, emitted on one line in slot order, so the shift is
+// a single changed line per file.
+func (t *translator) emitAddrConstsDecls(file int) []ast.Decl {
+	var decls []ast.Decl
+	if tbl := t.addrConsts[file]; len(tbl) > 0 {
+		values := make([]ast.Expr, len(tbl))
+		for v, i := range tbl {
+			values[i] = intLitSigned(int64(int32(v)))
+		}
+		decls = append(decls, addrConstsDecl(addrConstPrefix, values))
+	}
+	if tbl := t.addrConsts64[file]; len(tbl) > 0 {
+		values := make([]ast.Expr, len(tbl))
+		for v, i := range tbl {
+			values[i] = intLitSigned(int64(v))
+		}
+		decls = append(decls, addrConstsDecl(addrConstPrefix64, values))
+	}
+	return decls
+}
+
+// addrConstPrefix / addrConstPrefix64 name the address constants; the
+// slot number follows. Short on purpose: the name appears once per
+// address use across the whole module.
+const (
+	addrConstPrefix   = "_a"
+	addrConstPrefix64 = "_a64_"
+)
+
+func addrConstsDecl(prefix string, values []ast.Expr) ast.Decl {
+	names := make([]*ast.Ident, len(values))
+	for i := range values {
+		names[i] = newID(prefix + strconv.Itoa(i))
+	}
+	return &ast.GenDecl{
+		Tok:   token.CONST,
+		Specs: []ast.Spec{&ast.ValueSpec{Names: names, Values: values}},
 	}
 }
 
@@ -3199,6 +3418,34 @@ func (t *translator) compileBodyViaSSA(funcIdx uint32, fn wasm.Function) (*ast.B
 // reportMemMetrics writes the memory-promotion summary to
 // stderr once codegen has finished. No-op when no memory accesses were
 // seen. Called by each translate* path.
+// reportAddrConsts prints the static-data window AddrConsts derived and
+// how many slots each emitted file's table holds. The window is a
+// heuristic over the module's layout (see staticDataRange), so the
+// operator gets to see what it decided — and whether -addr-consts-max
+// is needed.
+func (t *translator) reportAddrConsts() {
+	if !t.opts.AddrConsts {
+		return
+	}
+	lo, hi := t.staticDataRange()
+	if hi == 0 {
+		fmt.Fprintln(os.Stderr, "wasm2go: -addr-consts: no static data in the module; nothing routed")
+		return
+	}
+	total := 0
+	files := map[int]bool{}
+	for file, tbl := range t.addrConsts {
+		total += len(tbl)
+		files[file] = true
+	}
+	for file, tbl := range t.addrConsts64 {
+		total += len(tbl)
+		files[file] = true
+	}
+	fmt.Fprintf(os.Stderr, "wasm2go: -addr-consts: static-data window [%d,%d), %d table slots over %d files\n",
+		lo, hi, total, len(files))
+}
+
 func (t *translator) reportMemMetrics() {
 	if t.memMetrics == nil || t.memMetrics.Total == 0 {
 		return

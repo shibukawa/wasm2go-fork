@@ -144,6 +144,106 @@ wasm2go -pure -symbol-names -chunks 6 -group-files -i module.wasm \
   -out-dir gen -pkg gen -import example.com/proj/gen
 ```
 
+### `-addr-consts`: static-data addresses out of the function bodies
+
+`-symbol-names` and `-group-files` keep the *shape* of the output stable.
+What they cannot keep stable is an address: adding one string literal to
+one C file makes wasm-ld shift every static-data address above it, and
+those addresses sit inline in the body of every function that passes a
+pointer — a format string to `errmsg`, a global's address to anything.
+
+Measured on pgmem's `bundle citext` commit (one small extension linked
+in, generated tree only):
+
+| | |
+|---|---|
+| files changed | 1,426 `.go` + `data.bin` |
+| lines | +55,809 / −50,361 |
+| added lines that differ from a deleted line *only* in an integer ≥ 4096 | 49,835 (89%) |
+| lines that are a real change | 5,760 |
+| what `data.bin` itself cost (thin pack) | 102 KB |
+
+So the blob is not the problem — git deltas it — and neither is the
+layout of the tree. The problem is 50,000 lines of shifted literals.
+The insertion is not at the end, either: the new string landed 1.3% into
+the blob (a sorted symbol table), so linking the extension last would not
+have helped.
+
+`-addr-consts` names every constant that lands in the module's
+static-data window and declares the names once per emitted file:
+
+```go
+const _a0, _a1, _a2 = 4442992, 322584, 471635   // one line, in p0.go
+
+F_errmsg_internal(m, int32(_a1), int32(0))       // was int32(322584)
+```
+
+A named *constant*, not a table: `int32(_a1)` is still a constant
+expression, so the compiler folds it into the instruction stream exactly
+as it folded the literal and the generated machine code does not change
+at all (measured below). Only the one declaration absorbs a layout shift.
+
+- The window is `[lowest data-segment destination, top of .bss)`, floored
+  at 4096 (below that a constant is far more likely a size or a mask than
+  a pointer). `.bss` has no data segment, so its top is taken from the
+  highest constant global initializer above the data segments — wasm-ld's
+  `__stack_pointer` — capped by the declared initial memory.
+  `-addr-consts-max` overrides it; the derived window is printed to
+  stderr. Classifying loosely is safe: the constant holds the exact
+  value, so a non-address only costs a name. Classifying narrowly only
+  costs churn.
+- Constants outside the window keep their inline literal. On a memory64
+  module addresses are i64, so there the i32 constants stay inline and
+  `_a64_<n>` carries the i64 ones.
+- Memory-access offsets are untouched: a load or store with a constant
+  base still folds base+offset into one `_consts` entry, which was
+  already diff-stable (the whole table is one line) and which is a `var`
+  on purpose — that one must NOT be foldable into an addressing immediate
+  (the arm64 literal-pool hazard). The address constant such a base would
+  otherwise get is deliberately not allocated.
+- Names are handed out in first-use order, so a pure layout shift leaves
+  every name where it was and rewrites the values alone. A function added
+  in the middle of a chunk can still bump the names after it; on the
+  citext commit that mechanism (the existing `_consts` table) moved 290
+  body lines out of 55,809.
+
+For pgmem's module: window `[4096, 12919808)`, 31,745 constants over the
+six chunk packages, 81,636 reads. Simulating a pure data shift over the
+generated tree (a string inserted early, every address above it +688,
+`data.bin` grown to match):
+
+| | `-symbol-names -group-files` | + `-addr-consts` |
+|---|---|---|
+| files changed | 1,429 | 7 |
+| lines changed | 51,740 | 12 |
+| thin pack `git push` would send | 1.44 MB | 131 KB |
+
+Projecting the same substitution onto the real citext commit (which also
+adds functions, so its residue is larger) takes it from 55,809 changed
+lines to 5,912 plus the six declarations.
+
+What it costs. Nothing at runtime: p0's compiled text section is
+identical byte for byte with and without the flag (2,589,280 bytes), and
+on the asm-bundle path the generated `arm64.s` is unchanged — the
+constants are immediates there as before. The package archive grows 1.2%
+(33.09 MB → 33.48 MB of `.a`) for the export data of 4,448 constant
+names, which never reaches a linked binary. What it does cost is reading
+the generated code: the bodies no longer show the addresses, and the
+declaration at the top of `pN.go` is the place to look them up.
+
+Verified by generating pgmem's module both ways and substituting the
+declarations back into the bodies: all 1,796 files come out identical to
+the `-addr-consts`-less output (1,791 byte for byte, the six `pN.go` and
+the main file modulo the declaration's own line), and the whole 102 MB
+tree compiles. Without the flag the output is byte for byte what it was.
+
+Usage:
+
+```
+wasm2go -pure -symbol-names -chunks 6 -group-files -addr-consts \
+  -i module.wasm -out-dir gen -pkg gen -import example.com/proj/gen
+```
+
 ### Export method name collisions
 
 Two exports can mangle to the same Go method (`relation_close` and
@@ -173,7 +273,7 @@ time and fails without it. The fork's own tests avoid that:
 
 ```
 go test ./internal/wasm -run 'NameSection|CustomSection'
-go test ./internal/codegen -run 'SymbolNames|SymbolFuncNames|Group'
+go test ./internal/codegen -run 'SymbolNames|SymbolFuncNames|Group|AddrConsts'
 go test ./internal/gcasm -run Align
 ```
 
