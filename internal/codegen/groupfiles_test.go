@@ -152,6 +152,8 @@ func TestGroupFileName(t *testing.T) {
 		"Pg.Stat":         "pg_stat.go",
 		"aux":             "aux_.go", // Windows device name
 		"COM1":            "com1_.go",
+		"lpt0":            "lpt0_.go", // refused by Git for Windows only
+		"com0":            "com0.go",
 		"auxiliary":       "auxiliary.go",
 	}
 	for stem, want := range cases {

@@ -288,13 +288,15 @@ var goosGoarch = map[string]bool{
 }
 
 // windowsDevices are the names Windows refuses as a file's base name
-// whatever the extension (aux.go cannot be checked out there).
+// whatever the extension (aux.go cannot be checked out there). Windows
+// itself has no LPT0, but Git for Windows takes any digit after LPT
+// (only 1-9 after COM) and refuses lpt0.go all the same.
 var windowsDevices = map[string]bool{
 	"con": true, "prn": true, "aux": true, "nul": true,
 	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
 	"com6": true, "com7": true, "com8": true, "com9": true,
-	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
-	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+	"lpt0": true, "lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true,
+	"lpt5": true, "lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
 }
 
 // groupFileName turns a stem into a file name the go tool reads as

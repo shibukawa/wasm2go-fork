@@ -114,7 +114,11 @@ Every split is derived from names — there is no hashing or numbering —
 so a rebuilt module keeps every file it does not touch; only a group
 that crosses a threshold changes shape. File names are sanitized so the
 go tool reads them as plain package source (no `_test`, GOOS or GOARCH
-suffixes, no leading underscore).
+suffixes, no leading underscore), and a Windows device name gets a
+trailing underscore (`aux_.go`): whatever the extension, Git for Windows
+refuses to check out `aux.go`, and the go command refuses it in a module
+zip. `lpt0` counts as one too; Windows has no such device, but Git for
+Windows refuses it all the same.
 
 Measured on pgmem's history (five commits, two of which rebuild the
 wasm: one adds a host import, one links in pgcrypto). The table is the
