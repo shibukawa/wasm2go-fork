@@ -287,10 +287,20 @@ var goosGoarch = map[string]bool{
 	"test": true,
 }
 
+// windowsDevices are the names Windows refuses as a file's base name
+// whatever the extension (aux.go cannot be checked out there).
+var windowsDevices = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
 // groupFileName turns a stem into a file name the go tool reads as
 // plain package source: only [a-z0-9_], not starting with '_' (such
-// files are ignored), no GOOS/GOARCH/_test suffix, and not one of the
-// names the layout already uses.
+// files are ignored), no GOOS/GOARCH/_test suffix, not one of the
+// names the layout already uses, and not a Windows device name.
 func groupFileName(stem string, reserved map[string]bool) string {
 	var b strings.Builder
 	for _, r := range stem {
@@ -316,7 +326,7 @@ func groupFileName(stem string, reserved map[string]bool) string {
 		}
 		break
 	}
-	if reserved[s] {
+	if reserved[s] || windowsDevices[s] {
 		s += "_"
 	}
 	return s + ".go"

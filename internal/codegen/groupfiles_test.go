@@ -150,6 +150,9 @@ func TestGroupFileName(t *testing.T) {
 		"linux":           "linux.go",
 		"_x":              "x.go",
 		"Pg.Stat":         "pg_stat.go",
+		"aux":             "aux_.go", // Windows device name
+		"COM1":            "com1_.go",
+		"auxiliary":       "auxiliary.go",
 	}
 	for stem, want := range cases {
 		if got := groupFileName(stem, reserved); got != want {
