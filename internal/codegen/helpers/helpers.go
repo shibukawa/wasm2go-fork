@@ -1196,11 +1196,7 @@ func memoryFill(m *Module, dst int32, val int32, n int32) {
 		return
 	}
 	end := uint64(uint32(dst)) + uint64(uint32(n))
-	// Bounded by the backing slice, not memSize: an embedder that maps
-	// the whole growable range up front (and aliases shared segments
-	// above the guest-visible size into it) keeps every byte of the
-	// slice addressable, exactly as the unchecked load/store paths do.
-	if end > uint64(len(m.memory)) {
+	if end > memBound(m) {
 		wasm_trap_memfill_oob()
 	}
 	b := m.memory[uint32(dst):uint32(end)]
@@ -1229,7 +1225,7 @@ func memoryCopy(m *Module, dst int32, src int32, n int32) {
 	}
 	srcEnd := uint64(uint32(src)) + uint64(uint32(n))
 	dstEnd := uint64(uint32(dst)) + uint64(uint32(n))
-	if size := uint64(len(m.memory)); srcEnd > size || dstEnd > size {
+	if size := memBound(m); srcEnd > size || dstEnd > size {
 		wasm_trap_memcopy_oob()
 	}
 	copy(m.memory[uint32(dst):uint32(dstEnd)], m.memory[uint32(src):uint32(srcEnd)])
@@ -1255,6 +1251,21 @@ func wasm_trap_atomic_wait_forever() {
 	panic("wasm: blocking atomic wait with no other agents (wasi-threads not enabled)")
 }
 
+// memBound is the highest address a bounds-checked bulk or atomic access
+// may reach. A shared memory's slice spans the whole declared maximum from
+// the start, so only memSize says how much of it the guest may touch (and
+// reading it atomically keeps growth race-free without a lock). Otherwise
+// the slice is the truth: an embedder that maps the whole growable range
+// up front and aliases shared segments above the guest-visible size into
+// it keeps every byte of the slice addressable, exactly as the unchecked
+// load/store paths do.
+func memBound(m *Module) uint64 {
+	if m.memShared {
+		return m.memSize.Load()
+	}
+	return uint64(len(m.memory))
+}
+
 // atomicEA bounds- and alignment-checks an atomic access and returns the
 // effective address.
 // Atomic and thread helpers are all //go:noinline: several take func-literal
@@ -1266,11 +1277,7 @@ func wasm_trap_atomic_wait_forever() {
 //go:noinline
 func atomicEA(m *Module, addr int32, offset int32, size uint64) uint64 {
 	ea := uint64(uint32(addr)) + uint64(uint32(offset))
-	// memSize, not len(m.memory): a shared memory's slice spans the whole
-	// declared maximum from the start, so only memSize says how much of it
-	// the guest may touch — and reading it atomically is what keeps growth
-	// race-free without a lock on this path.
-	if ea+size > m.memSize.Load() {
+	if ea+size > memBound(m) {
 		wasm_trap_atomic_oob()
 	}
 	if ea&(size-1) != 0 {
