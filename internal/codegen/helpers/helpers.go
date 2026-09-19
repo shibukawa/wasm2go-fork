@@ -1196,7 +1196,11 @@ func memoryFill(m *Module, dst int32, val int32, n int32) {
 		return
 	}
 	end := uint64(uint32(dst)) + uint64(uint32(n))
-	if end > m.memSize.Load() {
+	// Bounded by the backing slice, not memSize: an embedder that maps
+	// the whole growable range up front (and aliases shared segments
+	// above the guest-visible size into it) keeps every byte of the
+	// slice addressable, exactly as the unchecked load/store paths do.
+	if end > uint64(len(m.memory)) {
 		wasm_trap_memfill_oob()
 	}
 	b := m.memory[uint32(dst):uint32(end)]
@@ -1225,7 +1229,7 @@ func memoryCopy(m *Module, dst int32, src int32, n int32) {
 	}
 	srcEnd := uint64(uint32(src)) + uint64(uint32(n))
 	dstEnd := uint64(uint32(dst)) + uint64(uint32(n))
-	if size := m.memSize.Load(); srcEnd > size || dstEnd > size {
+	if size := uint64(len(m.memory)); srcEnd > size || dstEnd > size {
 		wasm_trap_memcopy_oob()
 	}
 	copy(m.memory[uint32(dst):uint32(dstEnd)], m.memory[uint32(src):uint32(srcEnd)])
@@ -1321,6 +1325,22 @@ func atomicPtr64At(m *Module, ea uint64) *uint64 {
 // every prior non-atomic write to it, so the fast path is race-free.
 func atomicsContended(m *Module) bool {
 	return m.threads != nil && m.threads.nextTID.Load() != 0
+}
+
+// forceContendedAtomics makes every atomic helper of m take its LOCKed
+// path from now on, as if a wasi thread had been spawned. For an embedder
+// that shares part of m's linear memory with OTHER instances (several
+// single-threaded modules aliasing one segment, the way processes share
+// System V memory): no thread of m ever exists, yet the atomics in the
+// shared range race with those instances' goroutines. Host-facing API;
+// nothing in the generated code calls it.
+func forceContendedAtomics(m *Module) {
+	if m.threads == nil {
+		m.threads = &threadPool{}
+	}
+	if m.threads.nextTID.Load() == 0 {
+		m.threads.nextTID.Store(1)
+	}
 }
 
 // atomicSubword32 runs op on the byte lanes [shift, shift+bits) of the

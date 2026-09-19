@@ -441,6 +441,10 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	// module has a memory so the API is uniformly available.
 	if len(m.Memories) > 0 {
 		t.helpers["accessMemory"] = true
+		// forceContendedAtomics is host-facing too: an embedder that
+		// aliases a shared segment into several instances' memories
+		// needs the LOCKed atomic paths without spawning a wasi thread.
+		t.helpers["forceContendedAtomics"] = true
 		// The Module struct's memMu field needs "sync" — register it
 		// HERE, not only in emitModuleStruct: the multi-package path
 		// snapshots base's import set after emitHelpers but BEFORE
