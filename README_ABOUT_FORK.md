@@ -334,9 +334,10 @@ wasm2go -pure -symbol-names -chunks 1 -group-files -simd=go127 \
   `gen.py` (templates adjusted to that API, a new tag) and its name in
   `gosimdTags`, and regenerated modules keep building on every other
   release meanwhile.
-- Requirements: `-pure` and the multi-package layout; a `v128` may not
-  cross an export, an import or a global; `-outline` is not combined
-  with it. On amd64 the vector variant needs AVX2 at run time (the
+- Requirements: `-pure` and the multi-package layout (the CLI switches
+  to it for any module size when `-simd` is given, so `-out-dir` is
+  required); a `v128` may not cross an export, an import or a global;
+  `-outline` is not combined with it. On amd64 the vector variant needs AVX2 at run time (the
   `archsimd` 128-bit ops are VEX-encoded and the broadcasts are AVX2);
   `base` checks that in an `init` and panics with a message naming the
   fix, rather than faulting inside a function.

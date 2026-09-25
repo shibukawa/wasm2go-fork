@@ -99,6 +99,15 @@ func main() {
 		total += len(mod.Functions[i].Body)
 	}
 	wantsMulti := total > multiFileThreshold
+	// -simd needs the multi-package layout whatever the module's size
+	// (the variant files and the base helper set live in its packages).
+	if *simdTarget != "" {
+		if *outDir == "" {
+			fail("-simd requires the multi-package layout; pass -out-dir")
+		}
+		wantsMulti = true
+		defer transpile.SetMultiPackageThreshold(0)()
+	}
 
 	opts := transpile.Options{
 		Package:             *pkg,

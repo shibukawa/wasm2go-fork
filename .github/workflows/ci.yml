@@ -81,6 +81,35 @@ jobs:
       - name: Test with the arm64 splices enabled
         run: go test -count=1 ./transpile/... ./internal/gcasm/...
 
+  # The -simd backend: Go 1.27 with GOEXPERIMENT=simd, on both
+  # architectures the helper sets exist for. The helper differential
+  # test compares every archsimd helper with the pair-carrier reference;
+  # the transpile test builds and runs SIMD modules both ways.
+  test-simd:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOEXPERIMENT: simd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Install wat2wasm
+        run: make install/wat2wasm
+
+      - name: Test the archsimd helper set
+        run: go test -count=1 ./internal/codegen/helpers -run GoSIMD
+
+      - name: Build and run SIMD modules through -simd=go127
+        run: go test -count=1 ./transpile -run GoSIMD
+
   lint:
     runs-on: ubuntu-latest
     steps:
