@@ -39,6 +39,7 @@ Usage: python3 tools/gen-simd-gosimd/gen.py  (from the repo root)
 
 import os
 import re
+import subprocess
 import sys
 
 # The Go release whose simd/archsimd API the templates target. The build
@@ -1116,6 +1117,8 @@ def main():
     with open(path, "w") as f:
         f.write(gen_test(ops))
     print(path)
+    subprocess.check_call(["gofmt", "-w", os.path.join(HELPERS, "simd_g_%s_amd64.go" % VERSION),
+                           os.path.join(HELPERS, "simd_g_%s_arm64.go" % VERSION), path])
 
 
 if __name__ == "__main__":

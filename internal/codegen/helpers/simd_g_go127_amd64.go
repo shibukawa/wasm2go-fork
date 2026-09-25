@@ -2061,4 +2061,3 @@ func simd_g_m64_v128_store64_lane_l1(m *Module, addr int64, offset int64, v V128
 	*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))) = v.GetElem(1)
 	return 0
 }
-
