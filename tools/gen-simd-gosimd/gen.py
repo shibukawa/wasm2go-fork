@@ -204,6 +204,15 @@ def kload(name, t):
     return "archsimd.LoadUint64x2Array(&%s)%s" % (name, VIEW[t])
 
 
+def zero(t):
+    """An all-zero vector of lane type t, loaded from memory. Never the
+    zero VALUE (var z archsimd.T): gc copies that from X15 with a
+    legacy-SSE MOVUPS, and a single non-VEX instruction inside VEX code
+    costs an SSE/AVX state transition (~70 cycles) on every execution —
+    measured as a 30x slowdown of the lossless predictors."""
+    return kload("simdGZero", t)
+
+
 def binop(t, m, x="a", y="b"):
     return "return %s.%s(%s)%s" % (cast(t, x), m, cast(t, y), back(t))
 
@@ -332,8 +341,8 @@ def common_native():
             n[pfx + "load%d_splat" % bits] = "return %s%s" % (bc(t, "*(*%s)(unsafe.Add(m.M, uintptr(%s)))" % (gt, ea % (bits // 8))), back(t))
             n[pfx + "load%d_lane" % bits] = "return %s.SetElem({L}, *(*%s)(unsafe.Add(m.M, uintptr(%s))))%s" % (cast(t, "v"), gt, ea % (bits // 8), back(t))
             n[pfx + "store%d_lane" % bits] = "*(*%s)(unsafe.Add(m.M, uintptr(%s))) = %s.GetElem({L})\n\treturn 0" % (gt, ea % (bits // 8), cast(t, "v"))
-        n[pfx + "load32_zero"] = "var z archsimd.Uint32x4\n\treturn z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(%s))))%s" % (ea % 4, back("u32"))
-        n[pfx + "load64_zero"] = "var z archsimd.Uint64x2\n\treturn z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(%s))))" % (ea % 8)
+        n[pfx + "load32_zero"] = "return %s.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(%s))))%s" % (zero("u32"), ea % 4, back("u32"))
+        n[pfx + "load64_zero"] = "return %s.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(%s))))" % (zero("u64"), ea % 8)
         # widening loads: the 8 source bytes ride the low half of a broadcast
         # (register-only), then the common ExtendLo op widens them.
         for src, st, m, dt in (("8x8_s", "i8", "ExtendLo8ToInt16", "i16"), ("8x8_u", "u8", "ExtendLo8ToUint16", "u16"),
@@ -367,9 +376,8 @@ def amd64_native():
     n["simd_i64x2_shr_s"] = ("k := uint64(s & 63)\n"
                              "\tt := archsimd.BroadcastUint64x2(0x8000000000000000 >> k)\n"
                              "\treturn a.ShiftAllRight(k).Xor(t).Sub(t)")
-    n["simd_i64x2_abs"] = ("x := %s\n"
-                           "\tvar z archsimd.Int64x2\n"
-                           "\treturn x.IfElse(x.GreaterEqual(z), z.Sub(x))%s" % (cast("i64", "a"), back("i64")))
+    n["simd_i64x2_abs"] = ("x, z := %s, %s\n"
+                           "\treturn x.IfElse(x.GreaterEqual(z), z.Sub(x))%s" % (cast("i64", "a"), zero("i64"), back("i64")))
     # 64x64 multiply from 32x32->64 partial products (VPMULUDQ).
     n["simd_i64x2_mul"] = ("x, y := %s, %s\n"
                            "\tlo := x.MulWidenEven(y)\n"
@@ -378,8 +386,8 @@ def amd64_native():
                            "\treturn lo.Add(t1.Add(t2).ShiftAllLeft(32))" % (cast("u32", "a"), cast("u32", "b"), VIEW["u32"], VIEW["u32"]))
     n["simd_v128_any_true"] = "if a.IsZero() {\n\t\treturn 0\n\t}\n\treturn 1"
     for t, pre in (("i8", "i8x16"), ("i16", "i16x8"), ("i32", "i32x4"), ("i64", "i64x2")):
-        n["simd_%s_all_true" % pre] = ("var z archsimd.%s\n\tif %s.Equal(z).ToBits() == 0 {\n\t\treturn 1\n\t}\n\treturn 0" % (T[t], cast(t, "a")))
-        n["simd_%s_bitmask" % pre] = ("var z archsimd.%s\n\treturn int32(%s.Less(z).ToBits())" % (T[t], cast(t, "a")))
+        n["simd_%s_all_true" % pre] = ("if %s.Equal(%s).ToBits() == 0 {\n\t\treturn 1\n\t}\n\treturn 0" % (cast(t, "a"), zero(t)))
+        n["simd_%s_bitmask" % pre] = ("return int32(%s.Less(%s).ToBits())" % (cast(t, "a"), zero(t)))
     # popcnt via nibble table lookup (VPSHUFB).
     n["simd_i8x16_popcnt"] = ("lut := %s\n"
                               "\tm := %s\n"
@@ -394,11 +402,11 @@ def amd64_native():
                                       "\ty := %s.Max(%s).Min(%s)%s\n%s"
                                       % (cast("i16", "a"), bc("i16", "-128"), bc("i16", "127"), conv("i16", "i8"),
                                          cast("i16", "b"), bc("i16", "-128"), bc("i16", "127"), conv("i16", "i8"), pack))
-    n["simd_i8x16_narrow_i16x8_u"] = ("var z archsimd.Int16x8\n"
-                                      "\tx := %s.Max(z).Min(%s)%s\n"
-                                      "\ty := %s.Max(z).Min(%s)%s\n%s"
-                                      % (cast("i16", "a"), bc("i16", "255"), conv("i16", "i8"),
-                                         cast("i16", "b"), bc("i16", "255"), conv("i16", "i8"), pack))
+    n["simd_i8x16_narrow_i16x8_u"] = ("z, m := %s, %s\n"
+                                      "\tx := %s.Max(z).Min(m)%s\n"
+                                      "\ty := %s.Max(z).Min(m)%s\n%s"
+                                      % (zero("i16"), bc("i16", "255"), cast("i16", "a"), conv("i16", "i8"),
+                                         cast("i16", "b"), conv("i16", "i8"), pack))
     n["simd_i16x8_narrow_i32x4_s"] = "return %s.SaturateToInt16Concat(%s)%s" % (cast("i32", "a"), cast("i32", "b"), back("i16"))
     n["simd_i16x8_narrow_i32x4_u"] = "return %s.SaturateToUint16Concat(%s)%s" % (cast("i32", "a"), cast("i32", "b"), back("u16"))
     hi = "%s.PermuteScalars(2, 3, 2, 3)" % cast("i32", "a")
@@ -498,21 +506,21 @@ def arm64_native():
                            "\treturn xl.MulWidenLo(yl).Add(xh.MulWidenLo(yl).Add(xl.MulWidenLo(yh)).ShiftAllLeft(32))" % (cast("u32", "a"), cast("u32", "b")))
     n["simd_v128_any_true"] = "if a.GetElem(0)|a.GetElem(1) != 0 {\n\t\treturn 1\n\t}\n\treturn 0"
     for t, pre in (("i8", "i8x16"), ("i16", "i16x8"), ("i32", "i32x4"), ("i64", "i64x2")):
-        n["simd_%s_all_true" % pre] = ("var z archsimd.%s\n\tm := %s.Equal(z).To%s()%s\n\tif m.GetElem(0)|m.GetElem(1) == 0 {\n\t\treturn 1\n\t}\n\treturn 0"
-                                       % (T[t], cast(t, "a"), MASKINT[t], back(t)))
+        n["simd_%s_all_true" % pre] = ("m := %s.Equal(%s).To%s()%s\n\tif m.GetElem(0)|m.GetElem(1) == 0 {\n\t\treturn 1\n\t}\n\treturn 0"
+                                       % (cast(t, "a"), zero(t), MASKINT[t], back(t)))
     # bitmask: sign lanes AND a lane-index bit vector, then a horizontal sum.
-    n["simd_i8x16_bitmask"] = ("var z archsimd.Int8x16\n"
+    n["simd_i8x16_bitmask"] = ("z := %s\n"
                                "\tm := %s.Less(z).ToInt8x16()%s.And(archsimd.LoadUint64x2Array(&simdGBits8))\n"
                                "\tlo := (m.GetElem(0) * 0x0101010101010101) >> 56\n"
                                "\thi := (m.GetElem(1) * 0x0101010101010101) >> 56\n"
-                               "\treturn int32(lo | hi<<8)" % (cast("i8", "a"), back("i8")))
-    n["simd_i16x8_bitmask"] = ("var z archsimd.Int16x8\n"
-                               "\treturn int32(%s.Less(z).ToInt16x8()%s.And(%s).ReduceSum())" % (cast("i16", "a"), conv("i16", "u16"), kload("simdGBits16", "u16")))
-    n["simd_i32x4_bitmask"] = ("var z archsimd.Int32x4\n"
-                               "\treturn int32(%s.Less(z).ToInt32x4()%s.And(%s).ReduceSum())" % (cast("i32", "a"), conv("i32", "u32"), kload("simdGBits32", "u32")))
-    n["simd_i64x2_bitmask"] = ("var z archsimd.Int64x2\n"
+                               "\treturn int32(lo | hi<<8)" % (zero("i8"), cast("i8", "a"), back("i8")))
+    n["simd_i16x8_bitmask"] = ("z := %s\n"
+                               "\treturn int32(%s.Less(z).ToInt16x8()%s.And(%s).ReduceSum())" % (zero("i16"), cast("i16", "a"), conv("i16", "u16"), kload("simdGBits16", "u16")))
+    n["simd_i32x4_bitmask"] = ("z := %s\n"
+                               "\treturn int32(%s.Less(z).ToInt32x4()%s.And(%s).ReduceSum())" % (zero("i32"), cast("i32", "a"), conv("i32", "u32"), kload("simdGBits32", "u32")))
+    n["simd_i64x2_bitmask"] = ("z := %s\n"
                                "\tm := %s.Less(z).ToInt64x2()%s.And(archsimd.LoadUint64x2Array(&simdGBits64))\n"
-                               "\treturn int32(m.GetElem(0) | m.GetElem(1))" % (cast("i64", "a"), back("i64")))
+                               "\treturn int32(m.GetElem(0) | m.GetElem(1))" % (zero("i64"), cast("i64", "a"), back("i64")))
     # narrow: SQXTN/SQXTUN pack into the low half; ZIP1.2D joins two halves.
     for op, st, m, dt in (("simd_i8x16_narrow_i16x8_s", "i16", "SaturateToInt8", "i8"), ("simd_i8x16_narrow_i16x8_u", "i16", "SaturateToUint8", "u8"),
                           ("simd_i16x8_narrow_i32x4_s", "i32", "SaturateToInt16", "i16"), ("simd_i16x8_narrow_i32x4_u", "i32", "SaturateToUint16", "u16")):
@@ -578,6 +586,7 @@ CONSTS = {
     "simdGPackLo": (0x0e0c0a0806040200, 0x8080808080808080),
     "simdGPackHi": (0x8080808080808080, 0x0e0c0a0806040200),
     "simdGLowHalf": (0xffffffffffffffff, 0),
+    "simdGZero": (0, 0),
     "simdGBits8": (0x8040201008040201, 0x8040201008040201),
     "simdGBits16": (0x0008000400020001, 0x0080004000200010),
     "simdGBits32": (0x0000000200000001, 0x0000000800000004),

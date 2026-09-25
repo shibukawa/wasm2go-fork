@@ -88,6 +88,8 @@ var simdGPackHi = [2]uint64{0x8080808080808080, 0x0e0c0a0806040200}
 
 var simdGLowHalf = [2]uint64{0xffffffffffffffff, 0x0000000000000000}
 
+var simdGZero = [2]uint64{0x0000000000000000, 0x0000000000000000}
+
 var simdGBits8 = [2]uint64{0x8040201008040201, 0x8040201008040201}
 
 var simdGBits16 = [2]uint64{0x0008000400020001, 0x0080004000200010}
@@ -778,8 +780,7 @@ func simd_g_i8x16_neg(a V128) V128 {
 }
 
 func simd_g_i8x16_all_true(a V128) int32 {
-	var z archsimd.Int8x16
-	m := a.ReshapeToUint8s().BitsToInt8().Equal(z).ToInt8x16().ToBits().ReshapeToUint64s()
+	m := a.ReshapeToUint8s().BitsToInt8().Equal(archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint8s().BitsToInt8()).ToInt8x16().ToBits().ReshapeToUint64s()
 	if m.GetElem(0)|m.GetElem(1) == 0 {
 		return 1
 	}
@@ -787,7 +788,7 @@ func simd_g_i8x16_all_true(a V128) int32 {
 }
 
 func simd_g_i8x16_bitmask(a V128) int32 {
-	var z archsimd.Int8x16
+	z := archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint8s().BitsToInt8()
 	m := a.ReshapeToUint8s().BitsToInt8().Less(z).ToInt8x16().ToBits().ReshapeToUint64s().And(archsimd.LoadUint64x2Array(&simdGBits8))
 	lo := (m.GetElem(0) * 0x0101010101010101) >> 56
 	hi := (m.GetElem(1) * 0x0101010101010101) >> 56
@@ -843,8 +844,7 @@ func simd_g_i16x8_neg(a V128) V128 {
 }
 
 func simd_g_i16x8_all_true(a V128) int32 {
-	var z archsimd.Int16x8
-	m := a.ReshapeToUint16s().BitsToInt16().Equal(z).ToInt16x8().ToBits().ReshapeToUint64s()
+	m := a.ReshapeToUint16s().BitsToInt16().Equal(archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint16s().BitsToInt16()).ToInt16x8().ToBits().ReshapeToUint64s()
 	if m.GetElem(0)|m.GetElem(1) == 0 {
 		return 1
 	}
@@ -852,7 +852,7 @@ func simd_g_i16x8_all_true(a V128) int32 {
 }
 
 func simd_g_i16x8_bitmask(a V128) int32 {
-	var z archsimd.Int16x8
+	z := archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint16s().BitsToInt16()
 	return int32(a.ReshapeToUint16s().BitsToInt16().Less(z).ToInt16x8().ToBits().ReshapeToUint64s().ReshapeToUint16s().And(archsimd.LoadUint64x2Array(&simdGBits16).ReshapeToUint16s()).ReduceSum())
 }
 
@@ -905,8 +905,7 @@ func simd_g_i32x4_neg(a V128) V128 {
 }
 
 func simd_g_i32x4_all_true(a V128) int32 {
-	var z archsimd.Int32x4
-	m := a.ReshapeToUint32s().BitsToInt32().Equal(z).ToInt32x4().ToBits().ReshapeToUint64s()
+	m := a.ReshapeToUint32s().BitsToInt32().Equal(archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint32s().BitsToInt32()).ToInt32x4().ToBits().ReshapeToUint64s()
 	if m.GetElem(0)|m.GetElem(1) == 0 {
 		return 1
 	}
@@ -914,7 +913,7 @@ func simd_g_i32x4_all_true(a V128) int32 {
 }
 
 func simd_g_i32x4_bitmask(a V128) int32 {
-	var z archsimd.Int32x4
+	z := archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint32s().BitsToInt32()
 	return int32(a.ReshapeToUint32s().BitsToInt32().Less(z).ToInt32x4().ToBits().ReshapeToUint64s().ReshapeToUint32s().And(archsimd.LoadUint64x2Array(&simdGBits32).ReshapeToUint32s()).ReduceSum())
 }
 
@@ -998,8 +997,7 @@ func simd_g_i64x2_neg(a V128) V128 {
 }
 
 func simd_g_i64x2_all_true(a V128) int32 {
-	var z archsimd.Int64x2
-	m := a.BitsToInt64().Equal(z).ToInt64x2().ToBits()
+	m := a.BitsToInt64().Equal(archsimd.LoadUint64x2Array(&simdGZero).BitsToInt64()).ToInt64x2().ToBits()
 	if m.GetElem(0)|m.GetElem(1) == 0 {
 		return 1
 	}
@@ -1007,7 +1005,7 @@ func simd_g_i64x2_all_true(a V128) int32 {
 }
 
 func simd_g_i64x2_bitmask(a V128) int32 {
-	var z archsimd.Int64x2
+	z := archsimd.LoadUint64x2Array(&simdGZero).BitsToInt64()
 	m := a.BitsToInt64().Less(z).ToInt64x2().ToBits().And(archsimd.LoadUint64x2Array(&simdGBits64))
 	return int32(m.GetElem(0) | m.GetElem(1))
 }
@@ -1405,13 +1403,11 @@ func simd_g_v128_load64_splat(m *Module, addr int32, offset int32) V128 {
 }
 
 func simd_g_v128_load32_zero(m *Module, addr int32, offset int32) V128 {
-	var z archsimd.Uint32x4
-	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
+	return archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load64_zero(m *Module, addr int32, offset int32) V128 {
-	var z archsimd.Uint64x2
-	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
+	return archsimd.LoadUint64x2Array(&simdGZero).SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
 }
 
 func simd_g_v128_load8_lane_l0(m *Module, addr int32, offset int32, v V128) V128 {
@@ -1711,13 +1707,11 @@ func simd_g_m64_v128_f16x4_cvt_store(m *Module, addr int64, offset int64, v V128
 }
 
 func simd_g_m64_v128_load32_zero(m *Module, addr int64, offset int64) V128 {
-	var z archsimd.Uint32x4
-	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return archsimd.LoadUint64x2Array(&simdGZero).ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load64_zero(m *Module, addr int64, offset int64) V128 {
-	var z archsimd.Uint64x2
-	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
+	return archsimd.LoadUint64x2Array(&simdGZero).SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
 }
 
 func simd_g_m64_v128_load8_splat(m *Module, addr int64, offset int64) V128 {
