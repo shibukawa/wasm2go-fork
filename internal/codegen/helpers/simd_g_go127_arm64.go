@@ -96,9 +96,13 @@ var simdGBits32 = [2]uint64{0x0000000200000001, 0x0000000800000004}
 
 var simdGBits64 = [2]uint64{0x0000000000000001, 0x0000000000000002}
 
+var simdGK_i32_0x4000 = [2]uint64{0x0000400000004000, 0x0000400000004000}
+
+var simdGK_u8_16 = [2]uint64{0x1010101010101010, 0x1010101010101010}
+
 func simd_g_i8x16_shuffle(a V128, b V128, pat V128) V128 {
 	p := pat.ReshapeToUint8s()
-	return a.ReshapeToUint8s().LookupOrZero(p).Or(b.ReshapeToUint8s().LookupOrZero(p.Sub(archsimd.BroadcastUint8x16(16)))).ReshapeToUint64s()
+	return a.ReshapeToUint8s().LookupOrZero(p).Or(b.ReshapeToUint8s().LookupOrZero(p.Sub(archsimd.LoadUint64x2Array(&simdGK_u8_16).ReshapeToUint8s()))).ReshapeToUint64s()
 }
 
 func simd_g_i8x16_swizzle(a V128, s V128) V128 {
@@ -1022,7 +1026,7 @@ func simd_g_i64x2_shr_u(a V128, s int32) V128 {
 
 func simd_g_i16x8_q15mulr_sat_s(a V128, b V128) V128 {
 	x, y := a.ReshapeToUint16s().BitsToInt16(), b.ReshapeToUint16s().BitsToInt16()
-	r := archsimd.BroadcastInt32x4(0x4000)
+	r := archsimd.LoadUint64x2Array(&simdGK_i32_0x4000).ReshapeToUint32s().BitsToInt32()
 	p0 := x.MulWidenLo(y).Add(r).ShiftAllRight(15).SaturateToInt16().ToBits().ReshapeToUint64s()
 	p1 := x.HiToLo().MulWidenLo(y.HiToLo()).Add(r).ShiftAllRight(15).SaturateToInt16().ToBits().ReshapeToUint64s()
 	return p0.InterleaveLo(p1)

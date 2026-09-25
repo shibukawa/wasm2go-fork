@@ -160,8 +160,44 @@ def conv(frm, to):
     return BACK[frm] + VIEW[to]
 
 
+LANE_BITS = {"i8": 8, "u8": 8, "i16": 16, "u16": 16, "i32": 32, "u32": 32, "i64": 64, "u64": 64, "f32": 32, "f64": 64}
+
+# Lane-replicated constants the templates broadcast, collected as
+# package-level [2]uint64 variables: gc does not hoist a Broadcast out of
+# the loop that inlines it (three instructions per use, measured at 17%
+# of a libwebp lossless encode inside narrow_u), whereas a package
+# variable folds into the consuming instruction's memory operand.
+KCONSTS = {}
+
+
 def bc(t, val):
-    return "archsimd.Broadcast%s(%s)" % (T[t], val)
+    """A vector with val in every lane. Literal values become package
+    constants; anything else is a run-time Broadcast."""
+    lit = None
+    try:
+        lit = int(str(val), 0)
+    except ValueError:
+        try:
+            lit = float(val)
+        except ValueError:
+            lit = None
+    if lit is None:
+        return "archsimd.Broadcast%s(%s)" % (T[t], val)
+    bits = LANE_BITS[t]
+    if isinstance(lit, float):
+        import struct
+        if bits == 32:
+            lane = struct.unpack("<I", struct.pack("<f", lit))[0]
+        else:
+            lane = struct.unpack("<Q", struct.pack("<d", lit))[0]
+    else:
+        lane = lit & ((1 << bits) - 1)
+    word = 0
+    for i in range(64 // bits):
+        word |= lane << (bits * i)
+    name = "simdGK_%s_%s" % (t, str(val).replace("-", "m").replace(".", "_"))
+    KCONSTS[name] = (word, word)
+    return kload(name, t)
 
 
 def kload(name, t):
@@ -672,11 +708,12 @@ def bridge_body(name, params, ret):
 
 
 def gen_arch(arch, ops):
+    KCONSTS.clear()
     native = amd64_native() if arch == "amd64" else arm64_native()
     used = set()
     out = [HEADER % (VERSION_TAG, arch, VERSION, arch, SHUFFLE_CONST[arch][0], SHUFFLE_CONST[arch][1])]
     out.append(INIT_AMD64 if arch == "amd64" else INIT_ARM64)
-    for cname, (lo, hi) in CONSTS.items():
+    for cname, (lo, hi) in list(CONSTS.items()) + sorted(KCONSTS.items()):
         out.append("var %s = [2]uint64{0x%016x, 0x%016x}\n\n" % (cname, lo, hi))
     stats = {"native": 0, "bridge": 0}
     for name, params, ret, _mem in ops:
