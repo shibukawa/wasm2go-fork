@@ -285,8 +285,8 @@ def common_native():
     n["simd_i64x2_extend_low_i32x4_u"] = "return %s.ExtendLo2ToUint64()" % cast("u32", "a")
     # memory (32-bit and memory64 address forms share the templates; the
     # effective-address check is the existing simdEA / simdEA64)
-    for pfx, ea in (("simd_v128_", "simdEA(m, addr, offset, %d)"), ("simd_m64_v128_", "simdEA64(m, addr, offset, %d)")):
-        n[pfx + "load"] = "return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(%s))))" % (ea % 16)
+    for pfx, ea in (("simd_v128_", "simd_g_ea(m, addr, offset, %d)"), ("simd_m64_v128_", "simd_g_ea64(m, addr, offset, %d)")):
+        n[pfx + "load"] = "return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, %s)))" % (ea % 16)
         n[pfx + "store"] = "v.StoreArray((*[2]uint64)(unsafe.Add(m.M, uintptr(%s))))\n\treturn 0" % (ea % 16)
         if pfx == "simd_v128_":
             n[pfx + "load_nc"] = "return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(uint32(addr))+uint64(uint32(offset))))))"
@@ -305,10 +305,10 @@ def common_native():
                                ("32x2_s", "i32", "ExtendLo2ToInt64", "i64"), ("32x2_u", "u32", "ExtendLo2ToUint64", "u64")):
             n[pfx + "load" + src] = "return %s.%s()%s" % (cast(st, bc("u64", "*(*uint64)(unsafe.Add(m.M, uintptr(%s)))" % (ea % 8))), m, back(dt))
     n["simd_v128_load_rng"] = ("start := int64(uint64(uint32(addr))) + int64(rlo)\n"
-                               "\tif start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {\n\t\twasm_trap_simd_oob()\n\t}\n"
+                               "\tif start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {\n\t\tpanic(simdGOOB)\n\t}\n"
                                "\treturn archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(uint32(addr))+uint64(uint32(offset))))))")
     n["simd_m64_v128_load_rng"] = ("start := addr + rlo\n"
-                                   "\tif start < 0 || uint64(start)+uint64(span) > m.memSize.Load() {\n\t\twasm_trap_simd_oob()\n\t}\n"
+                                   "\tif start < 0 || uint64(start)+uint64(span) > m.memSize.Load() {\n\t\tpanic(simdGOOB)\n\t}\n"
                                    "\treturn archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(addr)+uint64(offset)))))")
     return n
 
@@ -588,6 +588,29 @@ func simd_g_to(v V128) [2]uint64 {
 \tvar p [2]uint64
 \tv.StoreArray(&p)
 \treturn p
+}
+
+// simd_g_ea / simd_g_ea64 are the bounds checks of the memory helpers
+// (the shape of simdEA / simdEA64), with the trap raised inline: a
+// call to the shared trap function costs the inliner more than the
+// whole helper is worth, and the loads would stop inlining.
+const simdGOOB = "wasm: v128 memory access out of bounds"
+
+func simd_g_ea(m *Module, addr int32, offset int32, size uint64) uintptr {
+	ea := uint64(uint32(addr)) + uint64(uint32(offset))
+	if ea+size > m.memSize.Load() {
+		panic(simdGOOB)
+	}
+	return uintptr(ea)
+}
+
+func simd_g_ea64(m *Module, addr int64, offset int64, size uint64) uintptr {
+	ea := uint64(addr) + uint64(offset)
+	end := ea + size
+	if ea < uint64(addr) || end < ea || end > m.memSize.Load() {
+		panic(simdGOOB)
+	}
+	return uintptr(ea)
 }
 
 // simd_g_i8x16_shuffle2 is i8x16.shuffle with the emitter-normalized

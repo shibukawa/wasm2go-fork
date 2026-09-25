@@ -40,6 +40,29 @@ func simd_g_to(v V128) [2]uint64 {
 	return p
 }
 
+// simd_g_ea / simd_g_ea64 are the bounds checks of the memory helpers
+// (the shape of simdEA / simdEA64), with the trap raised inline: a
+// call to the shared trap function costs the inliner more than the
+// whole helper is worth, and the loads would stop inlining.
+const simdGOOB = "wasm: v128 memory access out of bounds"
+
+func simd_g_ea(m *Module, addr int32, offset int32, size uint64) uintptr {
+	ea := uint64(uint32(addr)) + uint64(uint32(offset))
+	if ea+size > m.memSize.Load() {
+		panic(simdGOOB)
+	}
+	return uintptr(ea)
+}
+
+func simd_g_ea64(m *Module, addr int64, offset int64, size uint64) uintptr {
+	ea := uint64(addr) + uint64(offset)
+	end := ea + size
+	if ea < uint64(addr) || end < ea || end > m.memSize.Load() {
+		panic(simdGOOB)
+	}
+	return uintptr(ea)
+}
+
 // simd_g_i8x16_shuffle2 is i8x16.shuffle with the emitter-normalized
 // index vectors (0..15 selects from the respective source, 0x80 zeroes),
 // and simd_g_i8x16_swizzle_c the single-source form for patterns that
@@ -1309,7 +1332,7 @@ func simd_g_f64x2_promote_low_f32x4(a V128) V128 {
 func simd_g_v128_load_rng(m *Module, addr int32, offset int32, rlo int32, span int32) V128 {
 	start := int64(uint64(uint32(addr))) + int64(rlo)
 	if start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {
-		wasm_trap_simd_oob()
+		panic(simdGOOB)
 	}
 	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(uint32(addr))+uint64(uint32(offset))))))
 }
@@ -1319,7 +1342,7 @@ func simd_g_v128_load_nc(m *Module, addr int32, offset int32) V128 {
 }
 
 func simd_g_v128_load(m *Module, addr int32, offset int32) V128 {
-	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 16)))))
+	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, simd_g_ea(m, addr, offset, 16))))
 }
 
 func simd_g_v128_f16x4_cvt_store(m *Module, addr int32, offset int32, v V128) int32 {
@@ -1328,24 +1351,24 @@ func simd_g_v128_f16x4_cvt_store(m *Module, addr int32, offset int32, v V128) in
 }
 
 func simd_g_v128_store(m *Module, addr int32, offset int32, v V128) int32 {
-	v.StoreArray((*[2]uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 16)))))
+	v.StoreArray((*[2]uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 16)))))
 	return 0
 }
 
 func simd_g_v128_load8x8_s(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint8s().BitsToInt8().ExtendLo8ToInt16().ToBits().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint8s().BitsToInt8().ExtendLo8ToInt16().ToBits().ReshapeToUint64s()
 }
 
 func simd_g_v128_load8x8_u(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint8s().ExtendLo8ToUint16().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint8s().ExtendLo8ToUint16().ReshapeToUint64s()
 }
 
 func simd_g_v128_load16x4_s(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint16s().BitsToInt16().ExtendLo4ToInt32().ToBits().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint16s().BitsToInt16().ExtendLo4ToInt32().ToBits().ReshapeToUint64s()
 }
 
 func simd_g_v128_load16x4_u(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint16s().ExtendLo4ToUint32().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint16s().ExtendLo4ToUint32().ReshapeToUint64s()
 }
 
 func simd_g_f16x4_cvt(v V128) V128 {
@@ -1354,317 +1377,317 @@ func simd_g_f16x4_cvt(v V128) V128 {
 }
 
 func simd_g_v128_load32x2_s(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint32s().BitsToInt32().ExtendLo2ToInt64().ToBits()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint32s().BitsToInt32().ExtendLo2ToInt64().ToBits()
 }
 
 func simd_g_v128_load32x2_u(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8))))).ReshapeToUint32s().ExtendLo2ToUint64()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8))))).ReshapeToUint32s().ExtendLo2ToUint64()
 }
 
 func simd_g_v128_load8_splat(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint8x16(*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint8x16(*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_splat(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint16x8(*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint16x8(*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load32_splat(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint32x4(*(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint32x4(*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load64_splat(m *Module, addr int32, offset int32) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))))
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
 }
 
 func simd_g_v128_load32_zero(m *Module, addr int32, offset int32) V128 {
 	var z archsimd.Uint32x4
-	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load64_zero(m *Module, addr int32, offset int32) V128 {
 	var z archsimd.Uint64x2
-	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))))
+	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
 }
 
 func simd_g_v128_load8_lane_l0(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(0, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(0, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l1(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(1, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(1, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l2(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(2, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(2, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l3(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(3, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(3, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l4(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(4, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(4, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l5(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(5, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(5, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l6(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(6, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(6, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l7(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(7, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(7, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l8(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(8, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(8, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l9(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(9, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(9, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l10(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(10, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(10, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l11(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(11, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(11, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l12(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(12, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(12, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l13(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(13, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(13, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l14(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(14, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(14, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load8_lane_l15(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(15, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(15, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l0(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(0, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(0, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l1(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(1, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(1, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l2(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(2, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(2, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l3(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(3, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(3, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l4(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(4, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(4, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l5(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(5, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(5, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l6(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(6, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(6, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load16_lane_l7(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(7, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(7, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load32_lane_l0(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load32_lane_l1(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(1, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(1, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load32_lane_l2(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(2, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(2, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load32_lane_l3(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(3, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(3, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_v128_load64_lane_l0(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))))
+	return v.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
 }
 
 func simd_g_v128_load64_lane_l1(m *Module, addr int32, offset int32, v V128) V128 {
-	return v.SetElem(1, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))))
+	return v.SetElem(1, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))))
 }
 
 func simd_g_v128_store8_lane_l0(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(0)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(0)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l1(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(1)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(1)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l2(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(2)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(2)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l3(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(3)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(3)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l4(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(4)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(4)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l5(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(5)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(5)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l6(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(6)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(6)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l7(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(7)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(7)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l8(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(8)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(8)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l9(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(9)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(9)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l10(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(10)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(10)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l11(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(11)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(11)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l12(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(12)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(12)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l13(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(13)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(13)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l14(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(14)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(14)
 	return 0
 }
 
 func simd_g_v128_store8_lane_l15(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(15)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(15)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l0(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(0)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(0)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l1(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(1)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(1)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l2(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(2)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(2)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l3(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(3)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(3)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l4(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(4)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(4)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l5(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(5)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(5)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l6(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(6)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(6)
 	return 0
 }
 
 func simd_g_v128_store16_lane_l7(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(7)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(7)
 	return 0
 }
 
 func simd_g_v128_store32_lane_l0(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(0)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(0)
 	return 0
 }
 
 func simd_g_v128_store32_lane_l1(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(1)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(1)
 	return 0
 }
 
 func simd_g_v128_store32_lane_l2(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(2)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(2)
 	return 0
 }
 
 func simd_g_v128_store32_lane_l3(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(3)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(3)
 	return 0
 }
 
 func simd_g_v128_store64_lane_l0(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))) = v.GetElem(0)
+	*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))) = v.GetElem(0)
 	return 0
 }
 
 func simd_g_v128_store64_lane_l1(m *Module, addr int32, offset int32, v V128) int32 {
-	*(*uint64)(unsafe.Add(m.M, uintptr(simdEA(m, addr, offset, 8)))) = v.GetElem(1)
+	*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea(m, addr, offset, 8)))) = v.GetElem(1)
 	return 0
 }
 
 func simd_g_m64_v128_load(m *Module, addr int64, offset int64) V128 {
-	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 16)))))
+	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, simd_g_ea64(m, addr, offset, 16))))
 }
 
 func simd_g_m64_v128_load_rng(m *Module, addr int64, offset int64, rlo int64, span int64) V128 {
 	start := addr + rlo
 	if start < 0 || uint64(start)+uint64(span) > m.memSize.Load() {
-		wasm_trap_simd_oob()
+		panic(simdGOOB)
 	}
 	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(addr)+uint64(offset)))))
 }
@@ -1674,7 +1697,7 @@ func simd_g_m64_v128_load_nc(m *Module, addr int64, offset int64) V128 {
 }
 
 func simd_g_m64_v128_store(m *Module, addr int64, offset int64, v V128) int32 {
-	v.StoreArray((*[2]uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 16)))))
+	v.StoreArray((*[2]uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 16)))))
 	return 0
 }
 
@@ -1685,320 +1708,320 @@ func simd_g_m64_v128_f16x4_cvt_store(m *Module, addr int64, offset int64, v V128
 
 func simd_g_m64_v128_load32_zero(m *Module, addr int64, offset int64) V128 {
 	var z archsimd.Uint32x4
-	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return z.SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load64_zero(m *Module, addr int64, offset int64) V128 {
 	var z archsimd.Uint64x2
-	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))))
+	return z.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
 }
 
 func simd_g_m64_v128_load8_splat(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint8x16(*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint8x16(*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_splat(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint16x8(*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint16x8(*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32_splat(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint32x4(*(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return archsimd.BroadcastUint32x4(*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load64_splat(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))))
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
 }
 
 func simd_g_m64_v128_load8x8_s(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint8s().BitsToInt8().ExtendLo8ToInt16().ToBits().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint8s().BitsToInt8().ExtendLo8ToInt16().ToBits().ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8x8_u(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint8s().ExtendLo8ToUint16().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint8s().ExtendLo8ToUint16().ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16x4_s(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint16s().BitsToInt16().ExtendLo4ToInt32().ToBits().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint16s().BitsToInt16().ExtendLo4ToInt32().ToBits().ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16x4_u(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint16s().ExtendLo4ToUint32().ReshapeToUint64s()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint16s().ExtendLo4ToUint32().ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32x2_s(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint32s().BitsToInt32().ExtendLo2ToInt64().ToBits()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint32s().BitsToInt32().ExtendLo2ToInt64().ToBits()
 }
 
 func simd_g_m64_v128_load32x2_u(m *Module, addr int64, offset int64) V128 {
-	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8))))).ReshapeToUint32s().ExtendLo2ToUint64()
+	return archsimd.BroadcastUint64x2(*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8))))).ReshapeToUint32s().ExtendLo2ToUint64()
 }
 
 func simd_g_m64_v128_load8_lane_l0(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(0, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(0, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l1(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(1, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(1, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l2(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(2, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(2, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l3(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(3, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(3, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l4(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(4, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(4, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l5(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(5, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(5, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l6(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(6, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(6, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l7(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(7, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(7, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l8(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(8, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(8, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l9(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(9, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(9, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l10(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(10, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(10, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l11(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(11, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(11, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l12(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(12, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(12, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l13(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(13, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(13, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l14(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(14, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(14, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load8_lane_l15(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint8s().SetElem(15, *(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1))))).ReshapeToUint64s()
+	return v.ReshapeToUint8s().SetElem(15, *(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l0(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(0, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(0, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l1(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(1, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(1, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l2(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(2, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(2, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l3(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(3, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(3, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l4(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(4, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(4, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l5(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(5, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(5, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l6(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(6, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(6, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load16_lane_l7(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint16s().SetElem(7, *(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2))))).ReshapeToUint64s()
+	return v.ReshapeToUint16s().SetElem(7, *(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32_lane_l0(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(0, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32_lane_l1(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(1, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(1, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32_lane_l2(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(2, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(2, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load32_lane_l3(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.ReshapeToUint32s().SetElem(3, *(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4))))).ReshapeToUint64s()
+	return v.ReshapeToUint32s().SetElem(3, *(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4))))).ReshapeToUint64s()
 }
 
 func simd_g_m64_v128_load64_lane_l0(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))))
+	return v.SetElem(0, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
 }
 
 func simd_g_m64_v128_load64_lane_l1(m *Module, addr int64, offset int64, v V128) V128 {
-	return v.SetElem(1, *(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))))
+	return v.SetElem(1, *(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))))
 }
 
 func simd_g_m64_v128_store8_lane_l0(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(0)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(0)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l1(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(1)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(1)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l2(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(2)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(2)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l3(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(3)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(3)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l4(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(4)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(4)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l5(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(5)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(5)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l6(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(6)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(6)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l7(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(7)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(7)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l8(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(8)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(8)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l9(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(9)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(9)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l10(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(10)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(10)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l11(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(11)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(11)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l12(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(12)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(12)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l13(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(13)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(13)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l14(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(14)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(14)
 	return 0
 }
 
 func simd_g_m64_v128_store8_lane_l15(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint8)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(15)
+	*(*uint8)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 1)))) = v.ReshapeToUint8s().GetElem(15)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l0(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(0)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(0)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l1(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(1)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(1)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l2(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(2)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(2)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l3(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(3)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(3)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l4(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(4)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(4)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l5(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(5)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(5)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l6(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(6)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(6)
 	return 0
 }
 
 func simd_g_m64_v128_store16_lane_l7(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint16)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(7)
+	*(*uint16)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 2)))) = v.ReshapeToUint16s().GetElem(7)
 	return 0
 }
 
 func simd_g_m64_v128_store32_lane_l0(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(0)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(0)
 	return 0
 }
 
 func simd_g_m64_v128_store32_lane_l1(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(1)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(1)
 	return 0
 }
 
 func simd_g_m64_v128_store32_lane_l2(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(2)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(2)
 	return 0
 }
 
 func simd_g_m64_v128_store32_lane_l3(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint32)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(3)
+	*(*uint32)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 4)))) = v.ReshapeToUint32s().GetElem(3)
 	return 0
 }
 
 func simd_g_m64_v128_store64_lane_l0(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))) = v.GetElem(0)
+	*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))) = v.GetElem(0)
 	return 0
 }
 
 func simd_g_m64_v128_store64_lane_l1(m *Module, addr int64, offset int64, v V128) int32 {
-	*(*uint64)(unsafe.Add(m.M, uintptr(simdEA64(m, addr, offset, 8)))) = v.GetElem(1)
+	*(*uint64)(unsafe.Add(m.M, uintptr(simd_g_ea64(m, addr, offset, 8)))) = v.GetElem(1)
 	return 0
 }
