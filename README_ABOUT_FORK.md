@@ -340,6 +340,18 @@ wasm2go -pure -symbol-names -chunks 1 -group-files -simd=go127 \
   `archsimd` 128-bit ops are VEX-encoded and the broadcasts are AVX2);
   `base` checks that in an `init` and panics with a message naming the
   fix, rather than faulting inside a function.
+- Go 1.27 caveat on AVX-512 machines: the runtime's asynchronous
+  preemption restores the vector registers with `VMOVDQU64 Z0..Z31` and
+  no `VZEROUPPER`, so after the first preemption the upper halves of
+  every register are dirty, and gc still moves vector values with the
+  legacy-SSE `MOVUPS` (zero values, spills and reloads). Each such
+  instruction then costs an SSE/AVX transition (~300 cycles measured
+  on a Xeon): a per-pixel kernel of libwebp ran 30x slower until its
+  zero vector was taken from memory instead of the zero value. The
+  helper set avoids zero values for that reason; gc's spill code is
+  out of its hands. Until the runtime is fixed, run such binaries with
+  `GODEBUG=asyncpreemptoff=1` (or `//go:debug asyncpreemptoff=1` in the
+  main package) when the CPU has AVX-512.
 
 ## Testing
 
