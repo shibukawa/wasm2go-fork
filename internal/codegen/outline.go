@@ -219,14 +219,14 @@ func outlinedFuncSig(t *translator, sig ssa.FuncSig) *ast.FuncType {
 	for i, p := range sig.Params {
 		params = append(params, &ast.Field{
 			Names: []*ast.Ident{newID(fmt.Sprintf("l%d", i))},
-			Type:  goTypeForSSAType(p),
+			Type:  t.goTypeSSA(p),
 		})
 	}
 	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
 	if len(sig.Results) > 0 {
 		ft.Results = &ast.FieldList{List: []*ast.Field{{
 			Names: []*ast.Ident{newID("r0")},
-			Type:  goTypeForSSAType(sig.Results[0]),
+			Type:  t.goTypeSSA(sig.Results[0]),
 		}}}
 	}
 	return ft

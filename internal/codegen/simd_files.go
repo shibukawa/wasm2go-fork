@@ -56,6 +56,15 @@ var cpufeatAmd64Src string
 //go:embed helpers/cpufeat_amd64.s
 var cpufeatAmd64AsmSrc string
 
+// The -simd=go127 helper sets (tools/gen-simd-gosimd/gen.py): the
+// archsimd twins of every helper above, pinned to Go 1.27 by build tag.
+
+//go:embed helpers/simd_g_go127_amd64.go
+var simdGGo127Amd64Src string
+
+//go:embed helpers/simd_g_go127_arm64.go
+var simdGGo127Arm64Src string
+
 // appendSimdHelperFiles adds the SIMD helper files to the output tree when
 // the module uses any SIMD helper. In multi-package mode the entry points
 // are exported (simd_ → Simd_) to match helperRef's capitalized cross-
@@ -96,4 +105,8 @@ func (t *translator) appendSimdHelperFiles(files map[string][]byte) {
 	files[dir+"cpufeat_arm64_other.go"] = goFile(cpufeatArm64OtherSrc)
 	files[dir+"cpufeat_amd64.go"] = goFile(cpufeatAmd64Src)
 	files[dir+"cpufeat_amd64.s"] = asmFile(cpufeatAmd64AsmSrc)
+	if t.opts.SIMD == gosimdTargetGo127 {
+		files[dir+"simd_g_go127_amd64.go"] = t.gosimdFile(goFile(simdGGo127Amd64Src))
+		files[dir+"simd_g_go127_arm64.go"] = t.gosimdFile(goFile(simdGGo127Arm64Src))
+	}
 }

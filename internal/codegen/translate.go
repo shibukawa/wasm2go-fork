@@ -240,6 +240,22 @@ type Options struct {
 	// AddrConsts routes through the table (0 = derive it from the
 	// module). Values at or above it stay inline literals.
 	AddrConstsMax uint64
+	// SIMD selects the simd/archsimd backend for v128 code, named by
+	// the Go release whose archsimd API it targets ("go127"; "" keeps
+	// the [2]uint64 pair carrier only). Every function that touches a
+	// v128 is then emitted twice: its pair form into <file>_nosimd.go
+	// and a form over 128-bit vector registers into <file>_gosimd.go,
+	// under a build tag of the form
+	//
+	//	goexperiment.simd && go1.27 && !go1.28 && (amd64 || arm64)
+	//
+	// so a GOEXPERIMENT=simd build on that release runs the vector
+	// code and every other build the pair code. The archsimd API is
+	// experimental (it changed between Go 1.26 and 1.27), which is why
+	// the target is explicit and pinned. Requires PureOnly and the
+	// multi-package layout; v128 may not cross an export, import or
+	// global. See gosimd.go and tools/gen-simd-gosimd.
+	SIMD string
 }
 
 // DirectAsmFn is a function retained for direct-asm emission: its
@@ -369,6 +385,9 @@ func Translate(w io.Writer, m *wasm.Module, opts Options) (Result, error) {
 	}
 	if opts.GroupFiles && !opts.SymbolNames {
 		return Result{}, fmt.Errorf("wasm2go: Options.GroupFiles requires Options.SymbolNames (files are grouped by symbol name)")
+	}
+	if err := validateGoSIMD(opts, m, autoMultiPackage); err != nil {
+		return Result{}, err
 	}
 
 	t := &translator{
@@ -989,6 +1008,16 @@ type translator struct {
 	// whole-file SIMD helper set (simd_scalar.go + per-arch asm) into the
 	// output tree. See appendSimdHelperFiles.
 	usesSimd bool
+	// gosimd is set while the vector variant of a function is being
+	// emitted (Options.SIMD); fnUsesV128 records that the function
+	// being emitted carries a v128 anywhere (body, signature, or an
+	// indirect-call type), which selects it for that second emission.
+	// simdKs / simdKIdx collect the function's v128 literals (see
+	// simdConstRef).
+	gosimd     bool
+	fnUsesV128 bool
+	simdKs     []simdKConst
+	simdKIdx   map[[2]uint64]int
 	// fusedShapes interns the fused SIMD regions the scalarizer
 	// creates; see simd_fuse.go and internal/simdfuse.
 	fusedShapes *fusedShapeState
@@ -1829,6 +1858,14 @@ const (
 // wrapper-pair source shapes (see linknameForwardKind). Returns nil
 // when no forwards are registered for the caller.
 func (t *translator) emitWasmFnForwards(callerChunk int, kind linknameForwardKind) []ast.Decl {
+	return t.emitWasmFnForwardsSel(callerChunk, kind, nil)
+}
+
+// emitWasmFnForwardsSel is emitWasmFnForwards restricted to the
+// functions sel accepts (nil accepts all). The -simd layout uses it to
+// route forwards whose signature carries a v128 into the tagged alias
+// files, since their Go type differs per variant.
+func (t *translator) emitWasmFnForwardsSel(callerChunk int, kind linknameForwardKind, sel func(funcIdx uint32) bool) []ast.Decl {
 	forwards := t.linknameForwards[callerChunk]
 	if len(forwards) == 0 {
 		return nil
@@ -1845,6 +1882,9 @@ func (t *translator) emitWasmFnForwards(callerChunk int, kind linknameForwardKin
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 
 	for _, funcIdx := range keys {
+		if sel != nil && !sel(funcIdx) {
+			continue
+		}
 		targetChunk := forwards[funcIdx]
 		fnName := t.funcName(funcIdx)
 		linknameTarget := fmt.Sprintf("%s/p%d.%s", t.opts.OutputImportPath, targetChunk, fnName)
@@ -2158,7 +2198,7 @@ func (t *translator) funcSignatureNamed(ft wasm.FuncType, withModuleParam, named
 		params.List = append(params.List, field)
 	}
 	for i, p := range ft.Params {
-		field := &ast.Field{Type: goTypeOf(p)}
+		field := &ast.Field{Type: t.goTypeOf(p)}
 		if named {
 			field.Names = []*ast.Ident{newID(fmt.Sprintf("l%d", i))}
 		}
@@ -2168,7 +2208,7 @@ func (t *translator) funcSignatureNamed(ft wasm.FuncType, withModuleParam, named
 	if len(ft.Results) > 0 {
 		results = &ast.FieldList{}
 		for _, r := range ft.Results {
-			results.List = append(results.List, &ast.Field{Type: goTypeOf(r)})
+			results.List = append(results.List, &ast.Field{Type: t.goTypeOf(r)})
 		}
 	}
 	return &ast.FuncType{Params: params, Results: results}
@@ -3324,6 +3364,7 @@ func (t *translator) emitOneDefinedFunction(funcIdx uint32) ([]ast.Decl, error) 
 	// key to the function they were outlined from.
 	t.curFuncName = t.funcName(funcIdx)
 	defer func() { t.curFuncName = "" }()
+	t.fnUsesV128 = false
 	body, err := t.compileBodyViaSSA(funcIdx, fn)
 	if err != nil {
 		return nil, fmt.Errorf("ssa: function %d (%s): %w", funcIdx, t.funcName(funcIdx), err)
@@ -3345,6 +3386,10 @@ func (t *translator) emitOneDefinedFunction(funcIdx uint32) ([]ast.Decl, error) 
 		return nil, fmt.Errorf("ssa: function %d (%s): %w", funcIdx, fnName, err)
 	}
 	out = append(out, outlined...)
+	if t.gosimd {
+		// The v128 literals of the vector variant, next to their function.
+		out = append(out, t.simdConstDecls()...)
+	}
 	return out, nil
 }
 
@@ -4089,6 +4134,15 @@ func (t *translator) emitHelpers() ([]ast.Decl, error) {
 	for _, decl := range t.helpersFile.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
 			helperNames[fn.Name.Name] = true
+		}
+	}
+	// The -simd helper set ships as whole files (appendSimdHelperFiles)
+	// but its memory helpers call into this name-filtered set
+	// (simdEA, the OOB trap, the f16 bridges): request those here so
+	// the closure below pulls them in.
+	if t.gosimdOn() && t.usesSimd {
+		for _, name := range gosimdHelperDeps(helperNames) {
+			t.helpers[name] = true
 		}
 	}
 	// Fixed-point: include every helper that any already-requested

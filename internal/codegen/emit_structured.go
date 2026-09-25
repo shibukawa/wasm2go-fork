@@ -644,7 +644,7 @@ func (se *structEmitter) decls() []ast.Stmt {
 			Tok: token.VAR,
 			Specs: []ast.Spec{&ast.ValueSpec{
 				Names: []*ast.Ident{newID(varNameForValue(v))},
-				Type:  goTypeForSSAType(v.Type),
+				Type:  se.em.goType(v.Type),
 			}},
 		}})
 		out = append(out, &ast.AssignStmt{
@@ -657,7 +657,7 @@ func (se *structEmitter) decls() []ast.Stmt {
 				Tok: token.VAR,
 				Specs: []ast.Spec{&ast.ValueSpec{
 					Names: []*ast.Ident{newID(phiTempName(v))},
-					Type:  goTypeForSSAType(v.Type),
+					Type:  se.em.goType(v.Type),
 				}},
 			}})
 			out = append(out, &ast.AssignStmt{

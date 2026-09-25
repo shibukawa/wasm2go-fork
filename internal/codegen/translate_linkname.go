@@ -83,6 +83,11 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 	type chunkFunc struct {
 		idx   uint32
 		decls []ast.Decl
+		// gdecls is the vector variant of a v128-touching function
+		// (Options.SIMD); nil for every other function. Such a
+		// function is kept out of the untagged files: decls go under
+		// the negated tag, gdecls under the tag.
+		gdecls []ast.Decl
 	}
 	chunkFuncs := make(map[int][]chunkFunc, len(plan.Chunks))
 	for chunkIdx, chunk := range plan.Chunks {
@@ -93,8 +98,19 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 			if err != nil {
 				return Result{}, err
 			}
-			bodies = append(bodies, decls...)
-			chunkFuncs[chunkIdx] = append(chunkFuncs[chunkIdx], chunkFunc{fIdx, decls})
+			cf := chunkFunc{idx: fIdx, decls: decls}
+			if t.gosimdOn() && t.fnUsesV128 {
+				t.gosimd = true
+				gdecls, err := t.emitOneDefinedFunction(fIdx)
+				t.gosimd = false
+				if err != nil {
+					return Result{}, err
+				}
+				cf.gdecls = gdecls
+			} else {
+				bodies = append(bodies, decls...)
+			}
+			chunkFuncs[chunkIdx] = append(chunkFuncs[chunkIdx], cf)
 		}
 		chunkBodies[chunkIdx] = bodies
 	}
@@ -249,39 +265,53 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 		}
 		files[path] = buf.Bytes()
 
+		pkg := fmt.Sprintf("p%d", chunkIdx)
+		if t.gosimdOn() && !t.opts.GroupFiles {
+			// The v128-touching functions of the package, both variants.
+			var pure, vec []ast.Decl
+			for _, cf := range chunkFuncs[chunkIdx] {
+				if cf.gdecls != nil {
+					pure = append(pure, cf.decls...)
+					vec = append(vec, cf.gdecls...)
+				}
+			}
+			if len(vec) > 0 {
+				content, err := t.renderChunkDecls(pkg, t.gosimdNotTag(), pure)
+				if err != nil {
+					return Result{}, fmt.Errorf("format %s_nosimd: %w", pkg, err)
+				}
+				files[pkg+"/"+pkg+"_nosimd.go"] = content
+				content, err = t.renderChunkDecls(pkg, t.gosimdTag(), vec)
+				if err != nil {
+					return Result{}, fmt.Errorf("format %s_gosimd: %w", pkg, err)
+				}
+				files[pkg+"/"+pkg+"_gosimd.go"] = content
+			}
+		}
+
 		if t.opts.GroupFiles {
-			pkg := fmt.Sprintf("p%d", chunkIdx)
 			byName := map[string][]ast.Decl{}
-			members := map[string][]string{} // stem -> names, sorted below
+			byNameVec := map[string][]ast.Decl{} // vector variants (Options.SIMD)
+			members := map[string][]string{}     // stem -> names, sorted below
 			for _, cf := range chunkFuncs[chunkIdx] {
 				name := t.funcName(cf.idx)
 				byName[name] = cf.decls
+				if cf.gdecls != nil {
+					byNameVec[name] = cf.gdecls
+				}
 				members[groupStem[name]] = append(members[groupStem[name]], name)
 			}
-			reserved := map[string]bool{pkg: true, "alias": true, pkg + "_pure": true, "base": true}
-			render := func(names []string) ([]byte, error) {
-				gf := &ast.File{Name: newID(pkg)}
+			reserved := map[string]bool{pkg: true, "alias": true, pkg + "_pure": true, "base": true,
+				pkg + "_nosimd": true, pkg + "_gosimd": true, "alias_nosimd": true, "alias_gosimd": true}
+			render := func(names []string, tag string, by map[string][]ast.Decl) ([]byte, error) {
 				var decls []ast.Decl
 				for _, name := range names {
-					decls = append(decls, byName[name]...)
+					decls = append(decls, by[name]...)
 				}
-				gimports := []*ast.ImportSpec{{
-					Name: newID("base"),
-					Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(t.opts.OutputImportPath + "/base")},
-				}}
-				for _, p := range scanStdlibRefs(decls) {
-					gimports = append(gimports, &ast.ImportSpec{Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p)}})
-				}
-				gf.Decls = append(gf.Decls, &ast.GenDecl{Tok: token.IMPORT, Specs: importsAsSpecs(gimports)})
-				gf.Decls = append(gf.Decls, decls...)
-				buf := &bytes.Buffer{}
-				if err := format.Node(buf, t.fset, gf); err != nil {
-					return nil, err
-				}
-				return buf.Bytes(), nil
+				return t.renderChunkDecls(pkg, tag, decls)
 			}
-			put := func(stem string, content []byte) error {
-				rel := pkg + "/" + groupFileName(stem, reserved)
+			put := func(rel string, content []byte) error {
+				rel = pkg + "/" + rel
 				if _, dup := files[rel]; dup {
 					return fmt.Errorf("group file %s emitted twice", rel)
 				}
@@ -290,12 +320,42 @@ func (t *translator) translateLinknameMulti() (Result, error) {
 			}
 			for stem, names := range members {
 				sort.Strings(names)
-				content, err := render(names)
-				if err != nil {
-					return Result{}, fmt.Errorf("format %s/%s: %w", pkg, stem, err)
+				file := groupFileName(stem, reserved)
+				// A v128-touching member goes to the tagged pair of
+				// files next to its group, never to the untagged one.
+				var plain, vec []string
+				for _, name := range names {
+					if byNameVec[name] != nil {
+						vec = append(vec, name)
+					} else {
+						plain = append(plain, name)
+					}
 				}
-				if err := put(stem, content); err != nil {
-					return Result{}, err
+				if len(plain) > 0 {
+					content, err := render(plain, "", byName)
+					if err != nil {
+						return Result{}, fmt.Errorf("format %s/%s: %w", pkg, stem, err)
+					}
+					if err := put(file, content); err != nil {
+						return Result{}, err
+					}
+				}
+				if len(vec) > 0 {
+					base := strings.TrimSuffix(file, ".go")
+					content, err := render(vec, t.gosimdNotTag(), byName)
+					if err != nil {
+						return Result{}, fmt.Errorf("format %s/%s_nosimd: %w", pkg, stem, err)
+					}
+					if err := put(base+"_nosimd.go", content); err != nil {
+						return Result{}, err
+					}
+					content, err = render(vec, t.gosimdTag(), byNameVec)
+					if err != nil {
+						return Result{}, fmt.Errorf("format %s/%s_gosimd: %w", pkg, stem, err)
+					}
+					if err := put(base+"_gosimd.go", content); err != nil {
+						return Result{}, err
+					}
 				}
 			}
 		}
@@ -512,7 +572,33 @@ func (t *translator) emitChunkAliasFiles(pkgName string, callerChunk int, dir st
 	// EVERY chunk — no asm bundle will exist anywhere — so the chunks
 	// collapse to the same single untagged bare-alias shape.
 	if callerChunk == chunkMain || t.opts.PureOnly {
-		bare := t.emitWasmFnForwards(callerChunk, linknameForwardBare)
+		var sel func(uint32) bool
+		if t.gosimdOn() {
+			// A forward whose signature carries a v128 has a different
+			// Go type per variant: one copy under each tag (below),
+			// none in the untagged file.
+			isV := func(idx uint32) bool { return sigHasV128(t.mod.FuncTypeOf(idx)) }
+			sel = func(idx uint32) bool { return !isV(idx) }
+			pure := t.emitWasmFnForwardsSel(callerChunk, linknameForwardBare, isV)
+			t.gosimd = true
+			vec := t.emitWasmFnForwardsSel(callerChunk, linknameForwardBare, isV)
+			t.gosimd = false
+			out, err := t.formatAliasFile(pkgName, t.gosimdNotTag(), pure)
+			if err != nil {
+				return nil, err
+			}
+			if out != nil {
+				files[path.Join(dir, "alias_nosimd.go")] = out
+			}
+			out, err = t.formatAliasFile(pkgName, t.gosimdTag(), vec)
+			if err != nil {
+				return nil, err
+			}
+			if out != nil {
+				files[path.Join(dir, "alias_gosimd.go")] = out
+			}
+		}
+		bare := t.emitWasmFnForwardsSel(callerChunk, linknameForwardBare, sel)
 		decls := append([]ast.Decl{}, bare...)
 		decls = append(decls, named...)
 		out, err := t.formatAliasFile(pkgName, "", decls)
@@ -563,3 +649,27 @@ func (t *translator) emitChunkAliasFiles(pkgName string, callerChunk int, dir st
 // drop the direct reference. The translator state threads wasm types
 // through transiently.
 var _ = wasm.ValI32
+
+// renderChunkDecls formats one chunk-package source file holding decls:
+// the base import, whatever stdlib the decls reference, and, when tag is
+// non-empty, a //go:build line ahead of the package clause.
+func (t *translator) renderChunkDecls(pkg, tag string, decls []ast.Decl) ([]byte, error) {
+	gf := &ast.File{Name: newID(pkg)}
+	gimports := []*ast.ImportSpec{{
+		Name: newID("base"),
+		Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(t.opts.OutputImportPath + "/base")},
+	}}
+	for _, p := range scanStdlibRefs(decls) {
+		gimports = append(gimports, &ast.ImportSpec{Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p)}})
+	}
+	gf.Decls = append(gf.Decls, &ast.GenDecl{Tok: token.IMPORT, Specs: importsAsSpecs(gimports)})
+	gf.Decls = append(gf.Decls, decls...)
+	buf := &bytes.Buffer{}
+	if tag != "" {
+		fmt.Fprintf(buf, "//go:build %s\n\n", tag)
+	}
+	if err := format.Node(buf, t.fset, gf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}

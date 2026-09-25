@@ -54,6 +54,7 @@ func main() {
 	groupMaxBytes := flag.Int("group-max-bytes", 0, "with -group-files: a group whose source per package exceeds this many bytes is split by its next token, then by leading letters (0 = 524288)")
 	groupHugeBytes := flag.Int("group-huge-bytes", 0, "with -group-files: a single function larger than this gets <group>_<name>.go to itself (0 = 131072)")
 	addrConsts := flag.Bool("addr-consts", false, "route constants that point into the module's static data through a package-level _addr table instead of emitting them inline, so rebuilding the wasm with added static data changes one table line per file instead of every function body that carries an address")
+	simdTarget := flag.String("simd", "", "also emit every v128 function over simd/archsimd vector registers for the given Go release (go127), under a GOEXPERIMENT=simd build tag; requires -pure and the multi-package layout")
 	addrConstsMax := flag.Uint64("addr-consts-max", 0, "with -addr-consts: top of the static-data address window (0 = derive it from the data segments and the stack-pointer global)")
 	directAsm := flag.String("direct-asm", "", "comma-separated function names (FnN / outlined FnNlH) to emit via the direct-asm backend instead of the gc-listing transform; unsupported functions fall back per function")
 	flag.Parse()
@@ -125,6 +126,7 @@ func main() {
 		GroupHugeBytes:      *groupHugeBytes,
 		AddrConsts:          *addrConsts,
 		AddrConstsMax:       *addrConstsMax,
+		SIMD:                *simdTarget,
 	}
 
 	if wantsMulti {

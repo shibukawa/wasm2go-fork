@@ -63,6 +63,10 @@ type ssaEmitter struct {
 	// curFn is the function whose body is being emitted; the fusion
 	// pass keys direct-asm window retention off its name.
 	curFn *ssa.Func
+	// curHoist is the hoisted-value set of the function being emitted
+	// (values that get a statement of their own); the vector variant's
+	// shuffle folding consults it before dropping an operand.
+	curHoist map[ssa.ValueID]bool
 
 	// noAddrConsts suppresses the _addr table for the constant being
 	// emitted right now. Set only while a memory access's base operand
@@ -207,7 +211,7 @@ func (em *ssaEmitter) emitFuncBody(f *ssa.Func) (*ast.BlockStmt, error) {
 				Tok: token.VAR,
 				Specs: []ast.Spec{&ast.ValueSpec{
 					Names: []*ast.Ident{newID(name)},
-					Type:  goTypeForSSAType(f.LocalTypes[i]),
+					Type:  em.goType(f.LocalTypes[i]),
 				}},
 			}})
 			// Blank-use so a write-only or unused local does not trip Go's
@@ -219,6 +223,11 @@ func (em *ssaEmitter) emitFuncBody(f *ssa.Func) (*ast.BlockStmt, error) {
 			})
 		}
 		body.List = append(decls, body.List...)
+	}
+	if em.gosimd() {
+		// The vector variant keeps v128 values in archsimd registers;
+		// there is nothing to scalarize.
+		return body, nil
 	}
 	// Carry v128 values as scalar pairs so they ride the register ABI —
 	// see simd_scalarize.go. Function parameters of v128 type (fallback
@@ -361,6 +370,7 @@ func (em *ssaEmitter) emitMultiBlock(f *ssa.Func) (*ast.BlockStmt, error) {
 
 	usage := emit.ComputeValueUsage(f)
 	hoist := emit.ComputeHoist(f, usage)
+	em.curHoist = hoist
 
 	body := &ast.BlockStmt{}
 
@@ -385,7 +395,7 @@ func (em *ssaEmitter) emitMultiBlock(f *ssa.Func) (*ast.BlockStmt, error) {
 			Tok: token.VAR,
 			Specs: []ast.Spec{&ast.ValueSpec{
 				Names: []*ast.Ident{newID(varNameForValue(v))},
-				Type:  goTypeForSSAType(v.Type),
+				Type:  em.goType(v.Type),
 			}},
 		}})
 		// Force a blank-use read on every hoisted var. Without it, Go's
@@ -406,7 +416,7 @@ func (em *ssaEmitter) emitMultiBlock(f *ssa.Func) (*ast.BlockStmt, error) {
 				Tok: token.VAR,
 				Specs: []ast.Spec{&ast.ValueSpec{
 					Names: []*ast.Ident{newID(phiTempName(v))},
-					Type:  goTypeForSSAType(v.Type),
+					Type:  em.goType(v.Type),
 				}},
 			}})
 			body.List = append(body.List, &ast.AssignStmt{
@@ -1053,6 +1063,9 @@ func (em *ssaEmitter) emitOp(v *ssa.Value, emit func(*ssa.Value) (ast.Expr, erro
 		if !ok {
 			return nil, fmt.Errorf("ssa emit: OpSimdConst without [2]uint64 aux")
 		}
+		if em.gosimd() {
+			return em.t.simdConstRef(lanes), nil
+		}
 		lit := &ast.CompositeLit{
 			Type: &ast.ArrayType{Len: intLit(2), Elt: newID("uint64")},
 			Elts: []ast.Expr{
@@ -1063,6 +1076,9 @@ func (em *ssaEmitter) emitOp(v *ssa.Value, emit func(*ssa.Value) (ast.Expr, erro
 		em.markSimdConst(lit)
 		return lit, nil
 	case ssa.OpSimdCall:
+		if em.gosimd() {
+			return em.emitGoSIMDCall(v, emit)
+		}
 		// Pure SIMD helper: helper(args...).
 		name, ok := v.Aux.(string)
 		if !ok || name == "" {
@@ -1081,6 +1097,9 @@ func (em *ssaEmitter) emitOp(v *ssa.Value, emit func(*ssa.Value) (ast.Expr, erro
 		em.markSimdCall(call, name, v, 0)
 		return call, nil
 	case ssa.OpSimdMemCall:
+		if em.gosimd() {
+			return em.emitGoSIMDMemCall(v, emit)
+		}
 		// Module-aware SIMD memory helper: helper(m, args...).
 		name, ok := v.Aux.(string)
 		if !ok || name == "" {
