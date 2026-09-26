@@ -48,7 +48,7 @@ const simdGOOB = "wasm: v128 memory access out of bounds"
 
 func simd_g_ea(m *Module, addr int32, offset int32, size uint64) uintptr {
 	ea := uint64(uint32(addr)) + uint64(uint32(offset))
-	if ea+size > m.memSize.Load() {
+	if ea+size > memBound(m) {
 		panic(simdGOOB)
 	}
 	return uintptr(ea)
@@ -1419,7 +1419,7 @@ func simd_g_f64x2_promote_low_f32x4(a V128) V128 {
 
 func simd_g_v128_load_rng(m *Module, addr int32, offset int32, rlo int32, span int32) V128 {
 	start := int64(uint64(uint32(addr))) + int64(rlo)
-	if start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {
+	if start < 0 || uint64(start)+uint64(uint32(span)) > memBound(m) {
 		panic(simdGOOB)
 	}
 	return archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(uint32(addr))+uint64(uint32(offset))))))

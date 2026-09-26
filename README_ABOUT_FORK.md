@@ -273,6 +273,18 @@ can be restored into the memory. The fork also emits `InitData(m)` so a
 fresh module can be booted in memory the caller allocated (pgmem maps
 linear memory outside the Go heap).
 
+### Bounds of caller-provided memories
+
+pgmem maps the whole growable range up front and places its shared
+segments above the size the guest sees. The bounds-checked accesses of
+a wasm32 memory (`memory.fill`, `memory.copy`, atomics, and the `v128`
+loads and stores of the pure-Go and `-simd` helpers) therefore stop at
+the end of the slice, as the unchecked scalar loads and stores do
+(`memBound`). A memory declared shared stays bounded by the guest-visible
+size, because its slice always spans the declared maximum. memory64
+modules and the SIMD splices of the asm backend still check against the
+guest-visible size.
+
 ### gcasm on Go 1.27
 
 - Go 1.27 prints data symbols in `-S` listings as `... size=N align=0xM`;

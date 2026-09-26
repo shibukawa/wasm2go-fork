@@ -7,8 +7,9 @@ package helpers
 // Every simd_g_<op> must agree with the pair-carrier helper simd_<op>
 // (asm-backed on amd64.v2/arm64, the scalar reference elsewhere) on the
 // corpus below (edge lanes plus seeded random vectors); memory
-// helpers are checked against their pair-carrier originals over a small
-// module, including the out-of-bounds trap.
+// helpers are checked against their pair-carrier originals over small
+// modules, one per bound memBound can pick, including the out-of-bounds
+// trap.
 
 import (
 	"bytes"
@@ -930,678 +931,707 @@ func TestGoSIMDLanes(t *testing.T) {
 }
 
 func TestGoSIMDMemory(t *testing.T) {
-	m := memTestModule(t, 256)
-	for _, addr := range []int32{0, 1, 3, 8, 16, 100, 200, 239, 240, 248, 252, 255} {
-		for _, off := range []int32{0, 1, 16} {
-			for _, v := range simdGCorpus[:8] {
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store(m3, addr, off, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8x8_s(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8x8_s(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8x8_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8x8_u(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8x8_u(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8x8_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16x4_s(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16x4_s(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16x4_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16x4_u(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16x4_u(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16x4_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32x2_s(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32x2_s(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32x2_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32x2_u(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32x2_u(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32x2_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_splat(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_splat(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_splat(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_splat(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_splat(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_splat(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_splat(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load64_splat(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load64_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_zero(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_zero(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_zero addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_zero(m, addr, off)) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load64_zero(m, addr, off) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load64_zero addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l0(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 0, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l1(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 1, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l2(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 2, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l3(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 3, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l4(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 4, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 4 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l5(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 5, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 5 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l6(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 6, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 6 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l7(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 7, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 7 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l8(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 8, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 8 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l9(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 9, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 9 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l10(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 10, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 10 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l11(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 11, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 11 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l12(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 12, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 12 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l13(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 13, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 13 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l14(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 14, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 14 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l15(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 15, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load8_lane lane 15 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l0(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 0, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l1(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 1, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l2(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 2, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l3(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 3, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l4(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 4, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 4 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l5(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 5, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 5 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l6(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 6, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 6 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l7(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 7, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load16_lane lane 7 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l0(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 0, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l1(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 1, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l2(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 2, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l3(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 3, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load32_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_lane_l0(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load64_lane(m, addr, off, 0, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load64_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					var got [2]uint64
-					gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_lane_l1(m, addr, off, simd_g_from(v))) })
-					var want [2]uint64
-					wt := simdGTrap(func() { want = simd_v128_load64_lane(m, addr, off, 1, v) })
-					if gt != wt || got != want {
-						t.Fatalf("simd_v128_load64_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l0(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 0, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l1(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 1, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l2(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 2, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l3(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 3, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l4(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 4, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 4 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l5(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 5, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 5 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l6(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 6, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 6 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l7(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 7, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 7 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l8(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 8, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 8 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l9(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 9, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 9 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l10(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 10, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 10 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l11(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 11, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 11 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l12(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 12, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 12 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l13(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 13, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 13 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l14(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 14, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 14 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store8_lane_l15(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 15, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store8_lane lane 15 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l0(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 0, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l1(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 1, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l2(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 2, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l3(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 3, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l4(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 4, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 4 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l5(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 5, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 5 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l6(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 6, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 6 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store16_lane_l7(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 7, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store16_lane lane 7 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store32_lane_l0(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 0, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store32_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store32_lane_l1(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 1, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store32_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store32_lane_l2(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 2, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store32_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store32_lane_l3(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 3, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store32_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store64_lane_l0(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store64_lane(m3, addr, off, 0, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store64_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
-					}
-				}
-				{
-					m2 := memTestModule(t, 256)
-					gt := simdGTrap(func() { simd_g_v128_store64_lane_l1(m2, addr, off, simd_g_from(v)) })
-					m3 := memTestModule(t, 256)
-					wt := simdGTrap(func() { simd_v128_store64_lane(m3, addr, off, 1, v) })
-					if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
-						t.Fatalf("simd_v128_store64_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+	// The slice runs to 256 bytes; memSize is where the guest-visible
+	// size ends. Past memSize the slice is addressable unless the memory
+	// is shared (memBound).
+	for _, shape := range []struct {
+		name   string
+		size   int
+		shared bool
+	}{
+		{"size=len", 256, false},
+		{"size<len", 128, false},
+		{"shared", 128, true},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			mk := func() *Module { return memTestModuleSized(t, 256, shape.size, shape.shared) }
+			m := mk()
+			for _, addr := range []int32{0, 1, 3, 8, 16, 100, 120, 128, 200, 239, 240, 248, 252, 255} {
+				for _, off := range []int32{0, 1, 16} {
+					// The range-checked load, with windows that cover the
+					// load itself as the coalescing pass guarantees.
+					for _, lo := range []int32{0, -16} {
+						for _, extra := range []int32{0, 32} {
+							rlo, span := off+lo, 16-lo+extra
+							var got, want [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load_rng(m, addr, off, rlo, span)) })
+							wt := simdGTrap(func() { want = simd_v128_load_rng(m, addr, off, rlo, span) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load_rng addr %d+%d rlo %d span %d: got %#x trap=%v, want %#x trap=%v", addr, off, rlo, span, got, gt, want, wt)
+							}
+						}
+					}
+					for _, v := range simdGCorpus[:8] {
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store(m3, addr, off, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8x8_s(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8x8_s(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8x8_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8x8_u(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8x8_u(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8x8_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16x4_s(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16x4_s(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16x4_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16x4_u(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16x4_u(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16x4_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32x2_s(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32x2_s(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32x2_s addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32x2_u(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32x2_u(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32x2_u addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_splat(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_splat(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_splat(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_splat(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_splat(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_splat(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_splat(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load64_splat(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load64_splat addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_zero(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_zero(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_zero addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_zero(m, addr, off)) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load64_zero(m, addr, off) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load64_zero addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l0(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 0, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l1(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 1, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l2(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 2, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l3(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 3, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l4(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 4, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 4 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l5(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 5, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 5 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l6(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 6, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 6 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l7(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 7, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 7 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l8(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 8, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 8 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l9(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 9, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 9 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l10(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 10, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 10 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l11(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 11, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 11 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l12(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 12, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 12 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l13(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 13, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 13 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l14(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 14, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 14 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load8_lane_l15(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load8_lane(m, addr, off, 15, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load8_lane lane 15 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l0(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 0, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l1(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 1, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l2(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 2, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l3(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 3, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l4(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 4, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 4 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l5(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 5, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 5 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l6(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 6, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 6 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load16_lane_l7(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load16_lane(m, addr, off, 7, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load16_lane lane 7 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l0(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 0, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l1(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 1, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l2(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 2, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_lane lane 2 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load32_lane_l3(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load32_lane(m, addr, off, 3, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load32_lane lane 3 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_lane_l0(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load64_lane(m, addr, off, 0, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load64_lane lane 0 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							var got [2]uint64
+							gt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load64_lane_l1(m, addr, off, simd_g_from(v))) })
+							var want [2]uint64
+							wt := simdGTrap(func() { want = simd_v128_load64_lane(m, addr, off, 1, v) })
+							if gt != wt || got != want {
+								t.Fatalf("simd_v128_load64_lane lane 1 addr %d+%d: got %#x trap=%v, want %#x trap=%v", addr, off, got, gt, want, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l0(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 0, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l1(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 1, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l2(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 2, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l3(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 3, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l4(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 4, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 4 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l5(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 5, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 5 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l6(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 6, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 6 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l7(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 7, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 7 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l8(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 8, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 8 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l9(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 9, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 9 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l10(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 10, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 10 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l11(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 11, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 11 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l12(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 12, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 12 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l13(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 13, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 13 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l14(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 14, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 14 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store8_lane_l15(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store8_lane(m3, addr, off, 15, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store8_lane lane 15 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l0(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 0, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l1(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 1, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l2(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 2, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l3(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 3, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l4(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 4, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 4 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l5(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 5, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 5 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l6(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 6, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 6 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store16_lane_l7(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store16_lane(m3, addr, off, 7, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store16_lane lane 7 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store32_lane_l0(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 0, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store32_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store32_lane_l1(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 1, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store32_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store32_lane_l2(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 2, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store32_lane lane 2 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store32_lane_l3(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store32_lane(m3, addr, off, 3, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store32_lane lane 3 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store64_lane_l0(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store64_lane(m3, addr, off, 0, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store64_lane lane 0 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
+						{
+							m2 := mk()
+							gt := simdGTrap(func() { simd_g_v128_store64_lane_l1(m2, addr, off, simd_g_from(v)) })
+							m3 := mk()
+							wt := simdGTrap(func() { simd_v128_store64_lane(m3, addr, off, 1, v) })
+							if gt != wt || !bytes.Equal(m2.memory, m3.memory) {
+								t.Fatalf("simd_v128_store64_lane lane 1 addr %d+%d: trap=%v want trap=%v, memory differs", addr, off, gt, wt)
+							}
+						}
 					}
 				}
 			}
-		}
+		})
 	}
 }
 

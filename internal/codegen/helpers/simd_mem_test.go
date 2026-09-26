@@ -7,7 +7,7 @@ package helpers
 // both their in-package callers and their semantic specification:
 // little-endian lane layout over the [2]uint64 carrier, u32+u32
 // effective addresses evaluated in 64 bits, and a trap (panic) for any
-// access past memSize.
+// access past memBound.
 
 import (
 	"encoding/binary"
@@ -32,6 +32,18 @@ func memTestModule(t *testing.T, n int) *Module {
 	}
 	m.M = unsafe.Pointer(unsafe.SliceData(m.memory))
 	m.memSize.Store(uint64(n))
+	return m
+}
+
+// memTestModuleSized is memTestModule with the guest-visible size cut
+// to size while the slice keeps all n bytes, the way an embedder hands
+// over a memory mapped for the whole growable range; shared marks the
+// memory as declared shared.
+func memTestModuleSized(t *testing.T, n, size int, shared bool) *Module {
+	t.Helper()
+	m := memTestModule(t, n)
+	m.memSize.Store(uint64(size))
+	m.memShared = shared
 	return m
 }
 
@@ -100,6 +112,38 @@ func TestSimdV128LoadRngAndNc(t *testing.T) {
 	mustTrap(t, "rng window end", func() { simd_v128_load_rng(m, 4000, 0, 0, 128) })
 	// A wrapped member's unwrapped window has a negative start.
 	mustTrap(t, "rng negative start", func() { simd_v128_load_rng(m, 8, 0, -32, 64) })
+}
+
+// TestSimdMemBound: v128 accesses are bounded like the bulk and atomic
+// ones. Past memSize, an ordinary memory stays addressable up to the end
+// of its slice — an embedder maps the whole growable range and places
+// shared segments up there — while a shared memory traps.
+func TestSimdMemBound(t *testing.T) {
+	v := [2]uint64{0x1122334455667788, 0x99aabbccddeeff00}
+	m := memTestModuleSized(t, 4096, 1024, false)
+	if got, want := simd_v128_load(m, 2048, 16), wantV128(m, 2064); got != want {
+		t.Fatalf("load past memSize = %x, want %x", got, want)
+	}
+	if got, want := simd_v128_load_rng(m, 2048, 16, 0, 64), wantV128(m, 2064); got != want {
+		t.Fatalf("load_rng past memSize = %x, want %x", got, want)
+	}
+	simd_v128_store(m, 3000, 0, v)
+	if got := wantV128(m, 3000); got != v {
+		t.Fatalf("store past memSize = %x, want %x", got, v)
+	}
+	if got, want := simd_v128_load(m, 4096-16, 0), wantV128(m, 4080); got != want {
+		t.Fatalf("last load of the slice = %x, want %x", got, want)
+	}
+	mustTrap(t, "load past the slice", func() { simd_v128_load(m, 4096-15, 0) })
+	mustTrap(t, "load_rng past the slice", func() { simd_v128_load_rng(m, 4000, 0, 0, 128) })
+
+	s := memTestModuleSized(t, 4096, 1024, true)
+	if got, want := simd_v128_load(s, 1024-16, 0), wantV128(s, 1008); got != want {
+		t.Fatalf("shared: last load below memSize = %x, want %x", got, want)
+	}
+	mustTrap(t, "shared: load past memSize", func() { simd_v128_load(s, 1024-15, 0) })
+	mustTrap(t, "shared: store past memSize", func() { simd_v128_store(s, 2048, 0, v) })
+	mustTrap(t, "shared: load_rng past memSize", func() { simd_v128_load_rng(s, 1000, 0, 0, 64) })
 }
 
 func TestSimdExtendingLoads(t *testing.T) {

@@ -350,7 +350,7 @@ def common_native():
                                ("32x2_s", "i32", "ExtendLo2ToInt64", "i64"), ("32x2_u", "u32", "ExtendLo2ToUint64", "u64")):
             n[pfx + "load" + src] = "return %s.%s()%s" % (cast(st, bc("u64", "*(*uint64)(unsafe.Add(m.M, uintptr(%s)))" % (ea % 8))), m, back(dt))
     n["simd_v128_load_rng"] = ("start := int64(uint64(uint32(addr))) + int64(rlo)\n"
-                               "\tif start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {\n\t\tpanic(simdGOOB)\n\t}\n"
+                               "\tif start < 0 || uint64(start)+uint64(uint32(span)) > memBound(m) {\n\t\tpanic(simdGOOB)\n\t}\n"
                                "\treturn archsimd.LoadUint64x2Array((*[2]uint64)(unsafe.Add(m.M, uintptr(uint64(uint32(addr))+uint64(uint32(offset))))))")
     n["simd_m64_v128_load_rng"] = ("start := addr + rlo\n"
                                    "\tif start < 0 || uint64(start)+uint64(span) > m.memSize.Load() {\n\t\tpanic(simdGOOB)\n\t}\n"
@@ -643,7 +643,7 @@ const simdGOOB = "wasm: v128 memory access out of bounds"
 
 func simd_g_ea(m *Module, addr int32, offset int32, size uint64) uintptr {
 	ea := uint64(uint32(addr)) + uint64(uint32(offset))
-	if ea+size > m.memSize.Load() {
+	if ea+size > memBound(m) {
 		panic(simdGOOB)
 	}
 	return uintptr(ea)
@@ -770,8 +770,9 @@ package helpers
 // Every simd_g_<op> must agree with the pair-carrier helper simd_<op>
 // (asm-backed on amd64.v2/arm64, the scalar reference elsewhere) on the
 // corpus below (edge lanes plus seeded random vectors); memory
-// helpers are checked against their pair-carrier originals over a small
-// module, including the out-of-bounds trap.
+// helpers are checked against their pair-carrier originals over small
+// modules, one per bound memBound can pick, including the out-of-bounds
+// trap.
 
 import (
 \t"math/rand"
@@ -1047,13 +1048,42 @@ func TestGoSIMDLanes(t *testing.T) {
 }
 
 func TestGoSIMDMemory(t *testing.T) {
-\tm := memTestModule(t, 256)
-\tfor _, addr := range []int32{0, 1, 3, 8, 16, 100, 200, 239, 240, 248, 252, 255} {
-\t\tfor _, off := range []int32{0, 1, 16} {
-\t\t\tfor _, v := range simdGCorpus[:8] {
+\t// The slice runs to 256 bytes; memSize is where the guest-visible
+\t// size ends. Past memSize the slice is addressable unless the memory
+\t// is shared (memBound).
+\tfor _, shape := range []struct {
+\t\tname   string
+\t\tsize   int
+\t\tshared bool
+\t}{
+\t\t{"size=len", 256, false},
+\t\t{"size<len", 128, false},
+\t\t{"shared", 128, true},
+\t} {
+\t\tt.Run(shape.name, func(t *testing.T) {
+\t\t\tmk := func() *Module { return memTestModuleSized(t, 256, shape.size, shape.shared) }
+\t\t\tm := mk()
+\t\t\tfor _, addr := range []int32{0, 1, 3, 8, 16, 100, 120, 128, 200, 239, 240, 248, 252, 255} {
+\t\t\t\tfor _, off := range []int32{0, 1, 16} {
+\t\t\t\t\t// The range-checked load, with windows that cover the
+\t\t\t\t\t// load itself as the coalescing pass guarantees.
+\t\t\t\t\tfor _, lo := range []int32{0, -16} {
+\t\t\t\t\t\tfor _, extra := range []int32{0, 32} {
+\t\t\t\t\t\t\trlo, span := off+lo, 16-lo+extra
+\t\t\t\t\t\t\tvar got, want [2]uint64
+\t\t\t\t\t\t\tgt := simdGTrap(func() { got = simd_g_to(simd_g_v128_load_rng(m, addr, off, rlo, span)) })
+\t\t\t\t\t\t\twt := simdGTrap(func() { want = simd_v128_load_rng(m, addr, off, rlo, span) })
+\t\t\t\t\t\t\tif gt != wt || got != want {
+\t\t\t\t\t\t\t\tt.Fatalf("simd_v128_load_rng addr %d+%d rlo %d span %d: got %#x trap=%v, want %#x trap=%v", addr, off, rlo, span, got, gt, want, wt)
+\t\t\t\t\t\t\t}
+\t\t\t\t\t\t}
+\t\t\t\t\t}
+\t\t\t\t\tfor _, v := range simdGCorpus[:8] {
 @MEM@
+\t\t\t\t\t}
+\t\t\t\t}
 \t\t\t}
-\t\t}
+\t\t})
 \t}
 }
 
@@ -1094,8 +1124,8 @@ def gen_test(ops):
                             % (g, L, name, L, name, L))
                     else:
                         mem_lines.append(
-                            "\t\t\t\t{\n\t\t\t\t\tm2 := memTestModule(t, 256)\n\t\t\t\t\tgt := simdGTrap(func() { %s_l%d(m2, addr, off, simd_g_from(v)) })\n"
-                            "\t\t\t\t\tm3 := memTestModule(t, 256)\n\t\t\t\t\twt := simdGTrap(func() { %s(m3, addr, off, %d, v) })\n"
+                            "\t\t\t\t{\n\t\t\t\t\tm2 := mk()\n\t\t\t\t\tgt := simdGTrap(func() { %s_l%d(m2, addr, off, simd_g_from(v)) })\n"
+                            "\t\t\t\t\tm3 := mk()\n\t\t\t\t\twt := simdGTrap(func() { %s(m3, addr, off, %d, v) })\n"
                             "\t\t\t\t\tif gt != wt || !bytes.Equal(m2.memory, m3.memory) {\n\t\t\t\t\t\tt.Fatalf(\"%s lane %d addr %%d+%%d: trap=%%v want trap=%%v, memory differs\", addr, off, gt, wt)\n\t\t\t\t\t}\n\t\t\t\t}"
                             % (g, L, name, L, name, L))
             elif ret == "[2]uint64":
@@ -1106,8 +1136,8 @@ def gen_test(ops):
                     % (g, name, name))
             else:  # store
                 mem_lines.append(
-                    "\t\t\t\t{\n\t\t\t\t\tm2 := memTestModule(t, 256)\n\t\t\t\t\tgt := simdGTrap(func() { %s(m2, addr, off, simd_g_from(v)) })\n"
-                    "\t\t\t\t\tm3 := memTestModule(t, 256)\n\t\t\t\t\twt := simdGTrap(func() { %s(m3, addr, off, v) })\n"
+                    "\t\t\t\t{\n\t\t\t\t\tm2 := mk()\n\t\t\t\t\tgt := simdGTrap(func() { %s(m2, addr, off, simd_g_from(v)) })\n"
+                    "\t\t\t\t\tm3 := mk()\n\t\t\t\t\twt := simdGTrap(func() { %s(m3, addr, off, v) })\n"
                     "\t\t\t\t\tif gt != wt || !bytes.Equal(m2.memory, m3.memory) {\n\t\t\t\t\t\tt.Fatalf(\"%s addr %%d+%%d: trap=%%v want trap=%%v, memory differs\", addr, off, gt, wt)\n\t\t\t\t\t}\n\t\t\t\t}"
                     % (g, name, name))
             continue

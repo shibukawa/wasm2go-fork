@@ -338,8 +338,9 @@ func (em *ssaEmitter) emitGoSIMDMemCall(v *ssa.Value, emit func(*ssa.Value) (ast
 
 // gosimdFile finishes the multi-package spelling of a -simd helper file
 // after appendSimdHelperFiles' generic simd_ → Simd_ rename: the
-// name-filtered helpers it calls (simdEA, the OOB trap) and the Module
-// field it reads are exported in base under emitHelpers' capitalization.
+// name-filtered helpers it calls (simdEA, memBound, the OOB trap) and the
+// Module field it reads are exported in base under emitHelpers'
+// capitalization.
 func (t *translator) gosimdFile(src []byte) []byte {
 	if !t.multiPackage {
 		return src
@@ -349,6 +350,7 @@ func (t *translator) gosimdFile(src []byte) []byte {
 		{"wasm_trap_Simd_oob(", "Wasm_trap_simd_oob("},
 		{"simdEA(", "SimdEA("},
 		{"simdEA64(", "SimdEA64("},
+		{"memBound(", "MemBound("},
 		{"m.memSize.", "m.MemSize."},
 	} {
 		s = strings.ReplaceAll(s, r[0], r[1])

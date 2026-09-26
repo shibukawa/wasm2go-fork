@@ -1251,14 +1251,14 @@ func wasm_trap_atomic_wait_forever() {
 	panic("wasm: blocking atomic wait with no other agents (wasi-threads not enabled)")
 }
 
-// memBound is the highest address a bounds-checked bulk or atomic access
-// may reach. A shared memory's slice spans the whole declared maximum from
-// the start, so only memSize says how much of it the guest may touch (and
-// reading it atomically keeps growth race-free without a lock). Otherwise
-// the slice is the truth: an embedder that maps the whole growable range
-// up front and aliases shared segments above the guest-visible size into
-// it keeps every byte of the slice addressable, exactly as the unchecked
-// load/store paths do.
+// memBound is the highest address a bounds-checked bulk, atomic or v128
+// access may reach. A shared memory's slice spans the whole declared
+// maximum from the start, so only memSize says how much of it the guest
+// may touch (and reading it atomically keeps growth race-free without a
+// lock). Otherwise the slice is the truth: an embedder that maps the
+// whole growable range up front and aliases shared segments above the
+// guest-visible size into it keeps every byte of the slice addressable,
+// exactly as the unchecked load/store paths do.
 func memBound(m *Module) uint64 {
 	if m.memShared {
 		return m.memSize.Load()
@@ -2606,7 +2606,7 @@ func simdEA(m *Module, addr int32, offset int32, size uint64) uint64 {
 	// Same shape as atomicEA, minus the alignment trap: SIMD memory access
 	// is alignment-hint-only, never trapping on misalignment.
 	ea := uint64(uint32(addr)) + uint64(uint32(offset))
-	if ea+size > m.memSize.Load() {
+	if ea+size > memBound(m) {
 		wasm_trap_simd_oob()
 	}
 	return ea
@@ -2627,12 +2627,15 @@ func simdEA(m *Module, addr int32, offset int32, size uint64) uint64 {
 // — a negative start means some member sits just below 2^32 unwrapped,
 // which the per-load checks would have trapped (memSize can never
 // reach 2^32: memoryGrow stops at wasmMemHardCap), so trapping on
-// start < 0 reproduces the original semantics exactly.
+// start < 0 reproduces the original semantics exactly. The argument
+// needs the bound below 2^32, which memBound exceeds only for an
+// embedder slice longer than wasmMemHardCapBytes: there a group whose
+// addresses straddle 2^32 traps where its per-load checks would not.
 //
 //go:noinline
 func simd_v128_load_rng(m *Module, addr int32, offset int32, rlo int32, span int32) [2]uint64 {
 	start := int64(uint64(uint32(addr))) + int64(rlo)
-	if start < 0 || uint64(start)+uint64(uint32(span)) > m.memSize.Load() {
+	if start < 0 || uint64(start)+uint64(uint32(span)) > memBound(m) {
 		wasm_trap_simd_oob()
 	}
 	ea := uint64(uint32(addr)) + uint64(uint32(offset))
